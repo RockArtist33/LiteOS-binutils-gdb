@@ -237,6 +237,7 @@ case ${generic_target} in
   i386-*-knetbsd*-gnu | \
   i386-*-netbsd* | \
   i386-*-openbsd*)			fmt=elf em=nbsd ;;
+  i386-*-liteos*)    fmt=elf ;;
   i386-*-linux-*)			fmt=elf em=linux
     case ${cpu}-${os} in
       x86_64*-linux-gnux32)		arch=x86_64:32 ;;

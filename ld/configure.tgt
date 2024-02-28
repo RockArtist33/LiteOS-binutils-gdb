@@ -439,6 +439,11 @@ i[3-7]86-*-mingw32*)	targ_emul=i386pe ;
 i[3-7]86-*-interix*)	targ_emul=i386pe_posix;
 			targ_extra_ofiles="deffilep.o pe-dll.o"
 			;;
+i[3-7]86-*-liteos*)
+			targ_emul=elf_i386_liteos
+			targ_extra_emuls=elf_i386
+			targ64_extra_emuls="elf_x86_64_liteos elf_x86_64"
+			;;
 i[3-7]86-*-beospe*)	targ_emul=i386beos
 			targ_extra_ofiles=
 			;;
@@ -1059,6 +1064,10 @@ x86_64-*-freebsd* | x86_64-*-kfreebsd*-gnu)
 x86_64-*-pe | x86_64-*-pep) targ_emul=i386pep ;
 			targ_extra_emuls=i386pe ;
 			targ_extra_ofiles="deffilep.o pdb.o pep-dll-x86_64.o pe-dll.o"
+			;;
+x86_64-*-liteos*)
+			targ_emul=elf_x86_64_liteos
+			targ_extra_emuls="elf_i386_liteos elf_x86_64 elf_i386"
 			;;
 x86_64-*-cygwin)	targ_emul=i386pep ;
 			targ_extra_emuls=i386pe
