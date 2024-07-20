@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "python-internal.h"
 #include "interps.h"
 #include "cli-out.h"
@@ -63,6 +62,9 @@ public:
 
   void pre_command_loop () override;
 
+  bool supports_new_ui () const override
+  { return false; }
+
 private:
 
   std::unique_ptr<ui_out> m_ui_out;
@@ -92,10 +94,14 @@ call_dap_fn (const char *fn_name)
 void
 dap_interp::init (bool top_level)
 {
+#if CXX_STD_THREAD
   call_dap_fn ("run");
 
   current_ui->input_fd = -1;
   current_ui->m_input_interactive_p = false;
+#else
+  error (_("GDB was compiled without threading, which DAP requires"));
+#endif
 }
 
 void

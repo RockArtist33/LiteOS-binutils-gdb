@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "python-internal.h"
 #include "charset.h"
 #include "objfiles.h"
@@ -184,7 +183,7 @@ objfpy_get_progspace (PyObject *self, void *closure)
   objfile_object *obj = (objfile_object *) self;
 
   if (obj->objfile)
-    return pspace_to_pspace_object (obj->objfile->pspace).release ();
+    return pspace_to_pspace_object (obj->objfile->pspace ()).release ();
 
   Py_RETURN_NONE;
 }

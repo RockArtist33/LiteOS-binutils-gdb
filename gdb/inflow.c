@@ -16,7 +16,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "frame.h"
 #include "inferior.h"
 #include "command.h"
@@ -29,7 +28,7 @@
 #include <fcntl.h>
 #include "gdbsupport/gdb_select.h"
 
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #ifdef HAVE_TERMIOS_H
 #include <termios.h>
 #endif

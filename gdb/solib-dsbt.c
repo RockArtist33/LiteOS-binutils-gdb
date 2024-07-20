@@ -17,7 +17,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "inferior.h"
 #include "gdbcore.h"
 #include "solib.h"
@@ -616,6 +616,7 @@ dsbt_current_sos (void)
 	      sop->so_original_name = sop->so_name;
 	    }
 
+	  sop->lm_info = std::move (li);
 	  sos.push_back (*sop);
 	}
       else

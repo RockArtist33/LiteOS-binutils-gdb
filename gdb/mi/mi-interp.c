@@ -17,10 +17,10 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 
 #include "mi-interp.h"
 
+#include "exceptions.h"
 #include "interps.h"
 #include "event-top.h"
 #include "gdbsupport/event-loop.h"
@@ -133,8 +133,6 @@ mi_interp::resume ()
   gdb_stdlog = mi->log;
   /* Route target output through the MI.  */
   gdb_stdtarg = mi->targ;
-  /* Route target error through the MI as well.  */
-  gdb_stdtargerr = mi->targ;
 
   deprecated_show_load_progress = mi_load_progress;
 }

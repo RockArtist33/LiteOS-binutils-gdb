@@ -19,8 +19,8 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
+#include "extract-store-integer.h"
 #include "target.h"
 #include "inferior.h"
 #include "infrun.h"
@@ -50,7 +50,7 @@
 #include "ada-lang.h"
 #include "linespec.h"
 #include "extension.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "observable.h"
 #include <optional>
 #include "gdbsupport/byte-vector.h"
@@ -651,11 +651,8 @@ print_one_inferior (struct inferior *inferior, bool recurse,
       if (inferior->pid != 0)
 	uiout->field_signed ("pid", inferior->pid);
 
-      if (inferior->pspace->exec_filename != nullptr)
-	{
-	  uiout->field_string ("executable",
-			       inferior->pspace->exec_filename.get ());
-	}
+      if (inferior->pspace->exec_filename () != nullptr)
+	uiout->field_string ("executable", inferior->pspace->exec_filename ());
 
       if (inferior->pid != 0)
 	{

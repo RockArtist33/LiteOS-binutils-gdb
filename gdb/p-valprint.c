@@ -19,14 +19,14 @@
 
 /* This file is derived from c-valprint.c */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "gdbsupport/gdb_obstack.h"
 #include "symtab.h"
 #include "gdbtypes.h"
 #include "expression.h"
 #include "value.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "gdbcore.h"
 #include "demangle.h"
 #include "valprint.h"

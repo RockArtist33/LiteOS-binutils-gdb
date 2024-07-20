@@ -19,17 +19,17 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "language.h"
 #include "symtab.h"
 #include "frame.h"
 #include "inferior.h"
 #include "gdbsupport/environ.h"
+#include "top.h"
 #include "value.h"
 #include "target.h"
 #include "gdbthread.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "regcache.h"
 #include "btrace.h"
 

@@ -15,9 +15,9 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "observable.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "target.h"
 #include "ada-lang.h"
 #include "gdbcore.h"
@@ -1495,7 +1495,7 @@ ada_tasks_clear_pspace_data (program_space *pspace)
 static void
 ada_tasks_new_objfile_observer (objfile *objfile)
 {
-  ada_tasks_clear_pspace_data (objfile->pspace);
+  ada_tasks_clear_pspace_data (objfile->pspace ());
 }
 
 /* The qcs command line flags for the "task apply" commands.  Keep

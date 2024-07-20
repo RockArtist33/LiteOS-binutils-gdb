@@ -38,7 +38,6 @@
 
 %{
 
-#include "defs.h"
 #include <ctype.h>
 #include "expression.h"
 #include "value.h"
@@ -467,7 +466,8 @@ PrimaryExpression:
 		      msymbol = lookup_bound_minimal_symbol (copy.c_str ());
 		      if (msymbol.minsym != NULL)
 			pstate->push_new<var_msym_value_operation> (msymbol);
-		      else if (!have_full_symbols () && !have_partial_symbols ())
+		      else if (!have_full_symbols (current_program_space)
+			       && !have_partial_symbols (current_program_space))
 			error (_("No symbol table is loaded.  Use the \"file\" command"));
 		      else
 			error (_("No symbol \"%s\" in current context."),
@@ -1155,13 +1155,8 @@ lex_one_token (struct parser_state *par_state)
 	toktype = parse_number (par_state, tokstart, p - tokstart,
 				got_dot|got_e, &yylval);
 	if (toktype == ERROR)
-	  {
-	    char *err_copy = (char *) alloca (p - tokstart + 1);
-
-	    memcpy (err_copy, tokstart, p - tokstart);
-	    err_copy[p - tokstart] = 0;
-	    error (_("Invalid number \"%s\"."), err_copy);
-	  }
+	  error (_("Invalid number \"%.*s\"."), (int) (p - tokstart),
+		 tokstart);
 	pstate->lexptr = p;
 	return toktype;
       }

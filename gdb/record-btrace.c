@@ -19,16 +19,16 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "record.h"
 #include "record-btrace.h"
 #include "gdbthread.h"
 #include "target.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "disasm.h"
 #include "observable.h"
 #include "cli/cli-utils.h"
 #include "source.h"
+#include "top.h"
 #include "ui-out.h"
 #include "symtab.h"
 #include "filenames.h"

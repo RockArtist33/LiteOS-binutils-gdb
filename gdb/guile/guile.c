@@ -20,13 +20,11 @@
 /* See README file in this directory for implementation notes, coding
    conventions, et.al.  */
 
-#include "defs.h"
 #include "breakpoint.h"
 #include "cli/cli-cmds.h"
 #include "cli/cli-script.h"
 #include "cli/cli-utils.h"
 #include "command.h"
-#include "gdbcmd.h"
 #include "top.h"
 #include "ui.h"
 #include "extension-priv.h"

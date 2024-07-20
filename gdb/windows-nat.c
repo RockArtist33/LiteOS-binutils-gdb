@@ -21,7 +21,7 @@
 
 /* Originally by Steve Chamberlain, sac@cygnus.com */
 
-#include "defs.h"
+#include "exceptions.h"
 #include "frame.h"
 #include "inferior.h"
 #include "infrun.h"
@@ -42,6 +42,7 @@
 #include <cygwin/version.h>
 #endif
 #include <algorithm>
+#include <atomic>
 #include <vector>
 #include <queue>
 
@@ -51,7 +52,7 @@
 #include "gdb_bfd.h"
 #include "gdbsupport/gdb_obstack.h"
 #include "gdbthread.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include <unistd.h>
 #include "exec.h"
 #include "solist.h"
@@ -357,6 +358,13 @@ private:
      needed.  */
   void wait_for_debug_event_main_thread (DEBUG_EVENT *event);
 
+  /* Force the process_thread thread to return from WaitForDebugEvent.
+     PROCESS_ALIVE is set to false if the inferior process exits while
+     we're trying to break out the process_thread thread.  This can
+     happen because this is called while all threads are running free,
+     while we're trying to detach.  */
+  void break_out_process_thread (bool &process_alive);
+
   /* Queue used to send requests to process_thread.  This is
      implicitly locked.  */
   std::queue<gdb::function_view<bool ()>> m_queue;
@@ -379,6 +387,12 @@ private:
 
   /* True if currently in async mode.  */
   bool m_is_async = false;
+
+  /* True if we last called ContinueDebugEvent and the process_thread
+     thread is now waiting for events.  False if WaitForDebugEvent
+     already returned an event, and we need to ContinueDebugEvent
+     again to restart the inferior.  */
+  bool m_continued = false;
 };
 
 static void
@@ -498,6 +512,8 @@ windows_nat_target::wait_for_debug_event_main_thread (DEBUG_EVENT *event)
 	wait_for_debug_event (event, INFINITE);
       return false;
     });
+
+  m_continued = false;
 }
 
 /* See nat/windows-nat.h.  */
@@ -826,6 +842,10 @@ windows_nat_target::store_registers (struct regcache *regcache, int r)
 static windows_solib *
 windows_make_so (const char *name, LPVOID load_addr)
 {
+  windows_solib *so = &windows_process.solibs.emplace_back ();
+  so->load_addr = load_addr;
+  so->original_name = name;
+
 #ifndef __CYGWIN__
   char *p;
   char buf[__PMAX];
@@ -854,6 +874,8 @@ windows_make_so (const char *name, LPVOID load_addr)
       GetSystemDirectory (buf, sizeof (buf));
       strcat (buf, "\\ntdll.dll");
     }
+
+  so->name = buf;
 #else
   wchar_t buf[__PMAX];
 
@@ -866,31 +888,31 @@ windows_make_so (const char *name, LPVOID load_addr)
 	  wcscat (buf, L"\\ntdll.dll");
 	}
     }
-#endif
-  windows_solib *so = &windows_process.solibs.emplace_back ();
-  so->load_addr = load_addr;
-  so->original_name = name;
-#ifndef __CYGWIN__
-  so->name = buf;
-#else
   if (buf[0])
     {
-      char cname[SO_NAME_MAX_PATH_SIZE];
-      cygwin_conv_path (CCP_WIN_W_TO_POSIX, buf, cname,
-			SO_NAME_MAX_PATH_SIZE);
-      so->name = cname;
+      bool ok = false;
+
+      /* Check how big the output buffer has to be.  */
+      ssize_t size = cygwin_conv_path (CCP_WIN_W_TO_POSIX, buf, nullptr, 0);
+      if (size > 0)
+	{
+	  /* SIZE includes the null terminator.  */
+	  so->name.resize (size - 1);
+	  if (cygwin_conv_path (CCP_WIN_W_TO_POSIX, buf, so->name.data (),
+				size) == 0)
+	    ok = true;
+	}
+      if (!ok)
+	so->name = so->original_name;
     }
   else
     {
-      char *rname = realpath (name, NULL);
-      if (rname && strlen (rname) < SO_NAME_MAX_PATH_SIZE)
-	{
-	  so->name = rname;
-	  free (rname);
-	}
+      gdb::unique_xmalloc_ptr<char> rname = gdb_realpath (name);
+      if (rname != nullptr)
+	so->name = rname.get ();
       else
 	{
-	  warning (_("dll path for \"%s\" too long or inaccessible"), name);
+	  warning (_("dll path for \"%s\" inaccessible"), name);
 	  so->name = so->original_name;
 	}
     }
@@ -1346,6 +1368,8 @@ windows_nat_target::windows_continue (DWORD continue_status, int id,
 				" - ContinueDebugEvent failed"),
 			      *err);
 
+  m_continued = !last_call;
+
   return TRUE;
 }
 
@@ -1365,8 +1389,8 @@ windows_nat_target::fake_create_process ()
       throw_winerror_with_name (_("OpenProcess call failed"), err);
       /*  We can not debug anything in that case.  */
     }
-  add_thread (ptid_t (windows_process.current_event.dwProcessId, 0,
-			      windows_process.current_event.dwThreadId),
+  add_thread (ptid_t (windows_process.current_event.dwProcessId,
+		      windows_process.current_event.dwThreadId, 0),
 		      windows_process.current_event.u.CreateThread.hThread,
 		      windows_process.current_event.u.CreateThread.lpThreadLocalBase,
 		      true /* main_thread_p */);
@@ -2026,18 +2050,27 @@ windows_nat_target::attach (const char *args, int from_tty)
 #ifdef __CYGWIN__
       if (!ok)
 	{
-	  /* Try fall back to Cygwin pid.  */
-	  pid = cygwin_internal (CW_CYGWIN_PID_TO_WINPID, pid);
+	  /* Maybe PID was a Cygwin PID.  Try the corresponding native
+	     Windows PID.  */
+	  DWORD winpid = cygwin_internal (CW_CYGWIN_PID_TO_WINPID, pid);
 
-	  if (pid > 0)
-	    ok = DebugActiveProcess (pid);
+	  if (winpid != 0)
+	    {
+	      /* It was indeed a Cygwin PID.  Fully switch to the
+		 Windows PID from here on.  We don't do this
+		 unconditionally to avoid ending up with PID=0 in the
+		 error message below.  */
+	      pid = winpid;
+
+	      ok = DebugActiveProcess (winpid);
+	    }
 	}
 #endif
 
       if (!ok)
 	err = (unsigned) GetLastError ();
 
-      return true;
+      return ok;
     });
 
   if (err.has_value ())
@@ -2067,19 +2100,139 @@ windows_nat_target::attach (const char *args, int from_tty)
 }
 
 void
+windows_nat_target::break_out_process_thread (bool &process_alive)
+{
+  /* This is called when the process_thread thread is blocked in
+     WaitForDebugEvent (unless it already returned some event we
+     haven't consumed yet), and we need to unblock it so that we can
+     have it call DebugActiveProcessStop.
+
+     To make WaitForDebugEvent return, we need to force some event in
+     the inferior.  Any method that lets us do that (without
+     disturbing the other threads), injects a new thread in the
+     inferior.
+
+     We don't use DebugBreakProcess for this, because that injects a
+     thread that ends up executing a breakpoint instruction.  We can't
+     let the injected thread hit that breakpoint _after_ we've
+     detached.  Consuming events until we see a breakpoint trap isn't
+     100% reliable, because we can't distinguish it from some other
+     thread itself deciding to call int3 while we're detaching, unless
+     we temporarily suspend all threads.  It's just a lot of
+     complication, and there's an easier way.
+
+     Important observation: the thread creation event for the newly
+     injected thread is sufficient to unblock WaitForDebugEvent.
+
+     Instead of DebugBreakProcess, we can instead use
+     CreateRemoteThread to control the code that the injected thread
+     runs ourselves.  We could consider pointing the injected thread
+     at some side-effect-free Win32 function as entry point.  However,
+     finding the address of such a function requires having at least
+     minimal symbols loaded for ntdll.dll.  Having a way that avoids
+     that is better, so that detach always works correctly even when
+     we don't have any symbols loaded.
+
+     So what we do is inject a thread that doesn't actually run ANY
+     userspace code, because we force-terminate it as soon as we see
+     its corresponding thread creation event.  CreateRemoteThread
+     gives us the new thread's ID, which we can match with the thread
+     associated with the CREATE_THREAD_DEBUG_EVENT event.  */
+
+  DWORD injected_thread_id = 0;
+  HANDLE injected_thread_handle
+    = CreateRemoteThread (windows_process.handle, NULL,
+			  0, (LPTHREAD_START_ROUTINE) 0,
+			  NULL, 0, &injected_thread_id);
+
+  if (injected_thread_handle == NULL)
+    {
+      DWORD err = GetLastError ();
+
+      DEBUG_EVENTS ("CreateRemoteThread failed with %u", err);
+
+      if (err == ERROR_ACCESS_DENIED)
+	{
+	  /* Creating the remote thread fails with ERROR_ACCESS_DENIED
+	     if the process exited before we had a chance to inject
+	     the thread.  Continue with the loop below and consume the
+	     process exit event anyhow, so that our caller can always
+	     call windows_continue.  */
+	}
+      else
+	throw_winerror_with_name (_("Can't detach from running process.  "
+				    "Interrupt it first."),
+				  err);
+    }
+
+  process_alive = true;
+
+  /* At this point, the user has declared that they want to detach, so
+     any event that happens from this point on should be forwarded to
+     the inferior.  */
+
+  for (;;)
+    {
+      DEBUG_EVENT current_event;
+      wait_for_debug_event_main_thread (&current_event);
+
+      if (current_event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT)
+	{
+	  DEBUG_EVENTS ("got EXIT_PROCESS_DEBUG_EVENT");
+	  process_alive = false;
+	  break;
+	}
+
+      if (current_event.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT
+	  && current_event.dwThreadId == injected_thread_id)
+	{
+	  DEBUG_EVENTS ("got CREATE_THREAD_DEBUG_EVENT for injected thread");
+
+	  /* Terminate the injected thread, so it doesn't run any code
+	     at all.  All we wanted was some event, and
+	     CREATE_THREAD_DEBUG_EVENT is sufficient.  */
+	  CHECK (TerminateThread (injected_thread_handle, 0));
+	  break;
+	}
+
+      DEBUG_EVENTS ("got unrelated event, code %u",
+		    current_event.dwDebugEventCode);
+      windows_continue (DBG_CONTINUE, -1, 0);
+    }
+
+  if (injected_thread_handle != NULL)
+    CHECK (CloseHandle (injected_thread_handle));
+}
+
+void
 windows_nat_target::detach (inferior *inf, int from_tty)
 {
+  /* If we see the process exit while unblocking the process_thread
+     helper thread, then we should skip the actual
+     DebugActiveProcessStop call.  But don't report an error.  Just
+     pretend the process exited shortly after the detach.  */
+  bool process_alive = true;
+
+  /* The process_thread helper thread will be blocked in
+     WaitForDebugEvent waiting for events if we've resumed the target
+     before we get here, e.g., with "attach&" or "c&".  We need to
+     unblock it so that we can have it call DebugActiveProcessStop
+     below, in the do_synchronously block.  */
+  if (m_continued)
+    break_out_process_thread (process_alive);
+
   windows_continue (DBG_CONTINUE, -1, 0, true);
 
   std::optional<unsigned> err;
-  do_synchronously ([&] ()
-    {
-      if (!DebugActiveProcessStop (windows_process.current_event.dwProcessId))
-	err = (unsigned) GetLastError ();
-      else
-	DebugSetProcessKillOnExit (FALSE);
-      return false;
-    });
+  if (process_alive)
+    do_synchronously ([&] ()
+      {
+	if (!DebugActiveProcessStop (windows_process.current_event.dwProcessId))
+	  err = (unsigned) GetLastError ();
+	else
+	  DebugSetProcessKillOnExit (FALSE);
+	return false;
+      });
 
   if (err.has_value ())
     {
@@ -2642,12 +2795,15 @@ windows_nat_target::create_inferior (const char *exec_file,
   windows_init_thread_list ();
   do_synchronously ([&] ()
     {
-      if (!create_process (nullptr, args, flags, w32_env,
-			   inferior_cwd != nullptr ? infcwd : nullptr,
-			   disable_randomization,
-			   &si, &pi))
+      BOOL ok = create_process (nullptr, args, flags, w32_env,
+				inferior_cwd != nullptr ? infcwd : nullptr,
+				disable_randomization,
+				&si, &pi);
+
+      if (!ok)
 	ret = (unsigned) GetLastError ();
-      return true;
+
+      return ok;
     });
 
   if (w32_env)
@@ -2768,16 +2924,18 @@ windows_nat_target::create_inferior (const char *exec_file,
   windows_init_thread_list ();
   do_synchronously ([&] ()
     {
-      if (!create_process (nullptr, /* image */
-			   args,	/* command line */
-			   flags,	/* start flags */
-			   w32env,	/* environment */
-			   inferior_cwd, /* current directory */
-			   disable_randomization,
-			   &si,
-			   &pi))
+      BOOL ok = create_process (nullptr, /* image */
+				args,	/* command line */
+				flags,	/* start flags */
+				w32env,	/* environment */
+				inferior_cwd, /* current directory */
+				disable_randomization,
+				&si,
+				&pi);
+      if (!ok)
 	ret = (unsigned) GetLastError ();
-      return true;
+
+      return ok;
     });
   if (tty != INVALID_HANDLE_VALUE)
     CloseHandle (tty);

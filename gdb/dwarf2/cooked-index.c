@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "dwarf2/cooked-index.h"
 #include "dwarf2/read.h"
 #include "dwarf2/stringify.h"
@@ -25,6 +24,8 @@
 #include "cp-support.h"
 #include "c-lang.h"
 #include "ada-lang.h"
+#include "event-top.h"
+#include "exceptions.h"
 #include "split-name.h"
 #include "observable.h"
 #include "run-on-main-thread.h"
@@ -331,7 +332,7 @@ cooked_index_shard::handle_gnat_encoded_entry (cooked_index_entry *entry,
 /* See cooked-index.h.  */
 
 void
-cooked_index_shard::finalize ()
+cooked_index_shard::finalize (const parent_map_map *parent_maps)
 {
   auto hash_name_ptr = [] (const void *p)
     {
@@ -372,6 +373,13 @@ cooked_index_shard::finalize ()
 
   for (cooked_index_entry *entry : m_entries)
     {
+      if ((entry->flags & IS_PARENT_DEFERRED) != 0)
+	{
+	  const cooked_index_entry *new_parent
+	    = parent_maps->find (entry->get_deferred_parent ());
+	  entry->resolve_parent (new_parent);
+	}
+
       /* Note that this code must be kept in sync with
 	 language_requires_canonicalization.  */
       gdb_assert (entry->canonical == nullptr);
@@ -506,7 +514,7 @@ cooked_index_worker::wait (cooked_state desired_state, bool allow_quit)
 #else
   /* Without threads, all the work is done immediately on the main
      thread, and there is never anything to wait for.  */
-  done = true;
+  done = desired_state == cooked_state::CACHE_DONE;
 #endif /* CXX_STD_THREAD */
 
   /* Only the main thread is allowed to report complaints and the
@@ -578,6 +586,23 @@ cooked_index_worker::set (cooked_state desired_state)
 #endif /* CXX_STD_THREAD */
 }
 
+/* See cooked-index.h.  */
+
+void
+cooked_index_worker::write_to_cache (const cooked_index *idx,
+				     deferred_warnings *warn) const
+{
+  if (idx != nullptr)
+    {
+      /* Writing to the index cache may cause a warning to be emitted.
+	 See PR symtab/30837.  This arranges to capture all such
+	 warnings.  This is safe because we know the deferred_warnings
+	 object isn't in use by any other thread at this point.  */
+      scoped_restore_warning_hook defer (warn);
+      m_cache_store.store ();
+    }
+}
+
 cooked_index::cooked_index (dwarf2_per_objfile *per_objfile,
 			    std::unique_ptr<cooked_index_worker> &&worker)
   : m_state (std::move (worker)),
@@ -614,30 +639,30 @@ cooked_index::wait (cooked_state desired_state, bool allow_quit)
 }
 
 void
-cooked_index::set_contents (vec_type &&vec)
+cooked_index::set_contents (vec_type &&vec, deferred_warnings *warn,
+			    const parent_map_map *parent_maps)
 {
   gdb_assert (m_vector.empty ());
   m_vector = std::move (vec);
 
   m_state->set (cooked_state::MAIN_AVAILABLE);
 
-  index_cache_store_context ctx (global_index_cache, m_per_bfd);
-
   /* This is run after finalization is done -- but not before.  If
      this task were submitted earlier, it would have to wait for
      finalization.  However, that would take a slot in the global
      thread pool, and if enough such tasks were submitted at once, it
      would cause a livelock.  */
-  gdb::task_group finalizers ([this, ctx = std::move (ctx)] ()
+  gdb::task_group finalizers ([=] ()
   {
     m_state->set (cooked_state::FINALIZED);
-    maybe_write_index (m_per_bfd, ctx);
+    m_state->write_to_cache (index_for_writing (), warn);
+    m_state->set (cooked_state::CACHE_DONE);
   });
 
   for (auto &idx : m_vector)
     {
       auto this_index = idx.get ();
-      finalizers.add_task ([=] () { this_index->finalize (); });
+      finalizers.add_task ([=] () { this_index->finalize (parent_maps); });
     }
 
   finalizers.start ();
@@ -834,18 +859,6 @@ cooked_index::dump (gdbarch *arch)
 
       gdb_printf ("\n");
     }
-}
-
-void
-cooked_index::maybe_write_index (dwarf2_per_bfd *per_bfd,
-				 const index_cache_store_context &ctx)
-{
-  if (index_for_writing () != nullptr)
-    {
-      /* (maybe) store an index in the cache.  */
-      global_index_cache.store (m_per_bfd, ctx);
-    }
-  m_state->set (cooked_state::CACHE_DONE);
 }
 
 /* Wait for all the index cache entries to be written before gdb

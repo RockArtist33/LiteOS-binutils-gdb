@@ -20,7 +20,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "frame.h"
 #include "frame-unwind.h"
 #include "frame-base.h"
@@ -30,7 +30,7 @@
 #include "inferior.h"
 #include "gdbtypes.h"
 #include "gdbcore.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "target.h"
 #include "value.h"
 #include "opcode/cris.h"
@@ -3829,7 +3829,7 @@ _initialize_cris_tdep ()
 			     _("Show the current CRIS version."),
 			     _("\
 Set to 10 for CRISv10 or 32 for CRISv32 if autodetection fails.\n\
-Defaults to 10. "),
+Defaults to 10."),
 			     set_cris_version,
 			     NULL, /* FIXME: i18n: Current CRIS version
 				      is %s.  */

@@ -17,7 +17,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "frame.h"
 #include "inferior.h"
 #include "gdbthread.h"
@@ -544,6 +544,8 @@ struct ppc_linux_nat_target final : public linux_nat_target
   void low_new_fork (struct lwp_info *, pid_t) override;
 
   void low_new_clone (struct lwp_info *, pid_t) override;
+
+  void low_init_process (pid_t pid) override;
 
   void low_forget_process (pid_t pid) override;
 
@@ -2703,6 +2705,19 @@ ppc_linux_nat_target::remove_watchpoint (CORE_ADDR addr, int len,
     }
 
   return 0;
+}
+
+/* Implement the "low_init_process" target_ops method.  */
+
+void
+ppc_linux_nat_target::low_init_process (pid_t pid)
+{
+  /* Set the hardware debug register capacity.  This requires the process to be
+     ptrace-stopped, otherwise detection will fail and software watchpoints will
+     be used instead of hardware.  If we allow this to be done lazily, we
+     cannot guarantee that it's called when the process is ptrace-stopped, so
+     do it now.  */
+  m_dreg_interface.detect (ptid_t (pid, pid));
 }
 
 /* Clean up the per-process info associated with PID.  When using the

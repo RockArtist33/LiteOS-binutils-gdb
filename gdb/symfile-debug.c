@@ -25,8 +25,7 @@
    and then if the function returns a result printing a message after it
    returns.  */
 
-#include "defs.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "objfiles.h"
 #include "observable.h"
 #include "source.h"
@@ -155,16 +154,7 @@ objfile::forget_cached_source_info ()
 		objfile_debug_name (this));
 
   for (compunit_symtab *cu : compunits ())
-    {
-      for (symtab *s : cu->filetabs ())
-	{
-	  if (s->fullname != NULL)
-	    {
-	      xfree (s->fullname);
-	      s->fullname = NULL;
-	    }
-	}
-    }
+    cu->forget_cached_source_info ();
 
   for (const auto &iter : qf)
     iter->forget_cached_source_info (this);

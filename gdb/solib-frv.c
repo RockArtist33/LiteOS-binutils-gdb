@@ -17,7 +17,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "gdbcore.h"
 #include "solib.h"
 #include "solist.h"
@@ -687,7 +687,7 @@ enable_break (void)
       return 0;
     }
 
-  if (!entry_point_address_query (&entry_point))
+  if (!entry_point_address_query (current_program_space, &entry_point))
     {
       solib_debug_printf ("Symbol file has no entry point.");
       return 0;

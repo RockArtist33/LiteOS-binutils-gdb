@@ -17,12 +17,13 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 
 #include "elf/external.h"
 #include "elf/common.h"
 #include "elf/mips.h"
 
+#include "exceptions.h"
+#include "extract-store-integer.h"
 #include "symtab.h"
 #include "bfd.h"
 #include "symfile.h"
@@ -1475,7 +1476,7 @@ svr4_current_sos ()
 
 	  auto *li = gdb::checked_static_cast<lm_info_svr4 *> (so->lm_info.get ());
 
-	  if (address_in_mem_range (li->l_ld, &vsyscall_range))
+	  if (vsyscall_range.contains (li->l_ld))
 	    {
 	      auto next = sos.erase (so);
 	      delete &*so;
@@ -1495,7 +1496,7 @@ svr4_current_sos ()
 CORE_ADDR
 svr4_fetch_objfile_link_map (struct objfile *objfile)
 {
-  struct svr4_info *info = get_svr4_info (objfile->pspace);
+  struct svr4_info *info = get_svr4_info (objfile->pspace ());
 
   /* Cause svr4_current_sos() to be run if it hasn't been already.  */
   if (info->main_lm_addr == 0)
@@ -1624,7 +1625,7 @@ probes_table_htab_remove_objfile_probes (void **slot, void *info)
   struct objfile *objfile = (struct objfile *) info;
 
   if (pa->objfile == objfile)
-    htab_clear_slot (get_svr4_info (objfile->pspace)->probes_table.get (),
+    htab_clear_slot (get_svr4_info (objfile->pspace ())->probes_table.get (),
 		     slot);
 
   return 1;
@@ -1635,7 +1636,7 @@ probes_table_htab_remove_objfile_probes (void **slot, void *info)
 static void
 probes_table_remove_objfile_probes (struct objfile *objfile)
 {
-  svr4_info *info = get_svr4_info (objfile->pspace);
+  svr4_info *info = get_svr4_info (objfile->pspace ());
   if (info->probes_table != nullptr)
     htab_traverse_noresize (info->probes_table.get (),
 			    probes_table_htab_remove_objfile_probes, objfile);

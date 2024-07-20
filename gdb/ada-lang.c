@@ -18,13 +18,15 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
-#include "defs.h"
 #include <ctype.h>
+#include "event-top.h"
+#include "exceptions.h"
+#include "extract-store-integer.h"
 #include "gdbsupport/gdb_regex.h"
 #include "frame.h"
 #include "symtab.h"
 #include "gdbtypes.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "expression.h"
 #include "parser-defs.h"
 #include "language.h"
@@ -190,9 +192,6 @@ static int ada_is_direct_array_type (struct type *);
 
 static struct value *ada_index_struct_field (int, struct value *, int,
 					     struct type *);
-
-static void add_component_interval (LONGEST, LONGEST, std::vector<LONGEST> &);
-
 
 static struct type *ada_find_any_type (const char *name);
 
@@ -4793,7 +4792,7 @@ standard_lookup (const char *name, const struct block *block,
 
   if (lookup_cached_symbol (name, domain, &sym.symbol, NULL))
     return sym.symbol;
-  ada_lookup_encoded_symbol (name, block, domain, &sym);
+  sym = ada_lookup_encoded_symbol (name, block, domain);
   cache_symbol (name, domain, sym.symbol, sym.block);
   return sym.symbol;
 }
@@ -5704,15 +5703,11 @@ ada_lookup_symbol_list (const char *name, const struct block *block,
 
 /* The result is as for ada_lookup_symbol_list with FULL_SEARCH set
    to 1, but choosing the first symbol found if there are multiple
-   choices.
+   choices.  */
 
-   The result is stored in *INFO, which must be non-NULL.
-   If no match is found, INFO->SYM is set to NULL.  */
-
-void
+block_symbol
 ada_lookup_encoded_symbol (const char *name, const struct block *block,
-			   domain_search_flags domain,
-			   struct block_symbol *info)
+			   domain_search_flags domain)
 {
   /* Since we already have an encoded name, wrap it in '<>' to force a
      verbatim match.  Otherwise, if the name happens to not look like
@@ -5721,9 +5716,7 @@ ada_lookup_encoded_symbol (const char *name, const struct block *block,
      would e.g., incorrectly lowercase object renaming names like
      "R28b" -> "r28b".  */
   std::string verbatim = add_angle_brackets (name);
-
-  gdb_assert (info != NULL);
-  *info = ada_lookup_symbol (verbatim.c_str (), block, domain);
+  return ada_lookup_symbol (verbatim.c_str (), block, domain);
 }
 
 /* Return a symbol in DOMAIN matching NAME, in BLOCK0 and enclosing
@@ -6469,7 +6462,9 @@ ada_get_tsd_type (struct inferior *inf)
   struct ada_inferior_data *data = get_ada_inferior_data (inf);
 
   if (data->tsd_type == 0)
-    data->tsd_type = ada_find_any_type ("ada__tags__type_specific_data");
+    data->tsd_type
+      = lookup_transparent_type ("<ada__tags__type_specific_data>",
+				 SEARCH_TYPE_DOMAIN);
   return data->tsd_type;
 }
 
@@ -9321,14 +9316,10 @@ check_objfile (const std::unique_ptr<ada_component> &comp,
   return comp->uses_objfile (objfile);
 }
 
-/* Assign the result of evaluating ARG starting at *POS to the INDEXth
-   component of LHS (a simple array or a record).  Does not modify the
-   inferior's memory, nor does it modify LHS (unless LHS ==
-   CONTAINER).  */
+/* See ada-exp.h.  */
 
-static void
-assign_component (struct value *container, struct value *lhs, LONGEST index,
-		  struct expression *exp, operation_up &arg)
+void
+aggregate_assigner::assign (LONGEST index, operation_up &arg)
 {
   scoped_value_mark mark;
 
@@ -9348,6 +9339,8 @@ assign_component (struct value *container, struct value *lhs, LONGEST index,
       elt = ada_to_fixed_value (elt);
     }
 
+  scoped_restore save_index = make_scoped_restore (&m_current_index, index);
+
   ada_aggregate_operation *ag_op
     = dynamic_cast<ada_aggregate_operation *> (arg.get ());
   if (ag_op != nullptr)
@@ -9358,9 +9351,23 @@ assign_component (struct value *container, struct value *lhs, LONGEST index,
 					      EVAL_NORMAL));
 }
 
+/* See ada-exp.h.  */
+
+value *
+aggregate_assigner::current_value () const
+{
+  /* Note that using an integer type here is incorrect -- the type
+     should be the array's index type.  Unfortunately, though, this
+     isn't currently available during parsing and type resolution.  */
+  struct type *index_type = builtin_type (exp->gdbarch)->builtin_int;
+  return value_from_longest (index_type, m_current_index);
+}
+
 bool
 ada_aggregate_component::uses_objfile (struct objfile *objfile)
 {
+  if (m_base != nullptr && m_base->uses_objfile (objfile))
+    return true;
   for (const auto &item : m_components)
     if (item->uses_objfile (objfile))
       return true;
@@ -9371,18 +9378,49 @@ void
 ada_aggregate_component::dump (ui_file *stream, int depth)
 {
   gdb_printf (stream, _("%*sAggregate\n"), depth, "");
+  if (m_base != nullptr)
+    {
+      gdb_printf (stream, _("%*swith delta\n"), depth + 1, "");
+      m_base->dump (stream, depth + 2);
+    }
   for (const auto &item : m_components)
     item->dump (stream, depth + 1);
 }
 
 void
-ada_aggregate_component::assign (struct value *container,
-				 struct value *lhs, struct expression *exp,
-				 std::vector<LONGEST> &indices,
-				 LONGEST low, LONGEST high)
+ada_aggregate_component::assign (aggregate_assigner &assigner)
 {
+  if (m_base != nullptr)
+    {
+      value *base = m_base->evaluate (nullptr, assigner.exp, EVAL_NORMAL);
+      if (ada_is_direct_array_type (base->type ()))
+	base = ada_coerce_to_simple_array (base);
+      if (!types_deeply_equal (assigner.container->type (), base->type ()))
+	error (_("Type mismatch in delta aggregate"));
+      value_assign_to_component (assigner.container, assigner.container,
+				 base);
+    }
+
   for (auto &item : m_components)
-    item->assign (container, lhs, exp, indices, low, high);
+    item->assign (assigner);
+}
+
+/* See ada-exp.h.  */
+
+ada_aggregate_component::ada_aggregate_component
+     (operation_up &&base, std::vector<ada_component_up> &&components)
+       : m_base (std::move (base)),
+	 m_components (std::move (components))
+{
+  for (const auto &component : m_components)
+    if (dynamic_cast<const ada_others_component *> (component.get ())
+	!= nullptr)
+      {
+	/* It's invalid and nonsensical to have 'others => ...' with a
+	   delta aggregate.  It was simpler to enforce this
+	   restriction here as opposed to in the parser.  */
+	error (_("'others' invalid in delta aggregate"));
+      }
 }
 
 /* See ada-exp.h.  */
@@ -9393,7 +9431,7 @@ ada_aggregate_operation::assign_aggregate (struct value *container,
 					   struct expression *exp)
 {
   struct type *lhs_type;
-  LONGEST low_index, high_index;
+  aggregate_assigner assigner;
 
   container = ada_coerce_ref (container);
   if (ada_is_direct_array_type (container->type ()))
@@ -9407,23 +9445,27 @@ ada_aggregate_operation::assign_aggregate (struct value *container,
     {
       lhs = ada_coerce_to_simple_array (lhs);
       lhs_type = check_typedef (lhs->type ());
-      low_index = lhs_type->bounds ()->low.const_val ();
-      high_index = lhs_type->bounds ()->high.const_val ();
+      assigner.low = lhs_type->bounds ()->low.const_val ();
+      assigner.high = lhs_type->bounds ()->high.const_val ();
     }
   else if (lhs_type->code () == TYPE_CODE_STRUCT)
     {
-      low_index = 0;
-      high_index = num_visible_fields (lhs_type) - 1;
+      assigner.low = 0;
+      assigner.high = num_visible_fields (lhs_type) - 1;
     }
   else
     error (_("Left-hand side must be array or record."));
 
-  std::vector<LONGEST> indices (4);
-  indices[0] = indices[1] = low_index - 1;
-  indices[2] = indices[3] = high_index + 1;
+  assigner.indices.push_back (assigner.low - 1);
+  assigner.indices.push_back (assigner.low - 1);
+  assigner.indices.push_back (assigner.high + 1);
+  assigner.indices.push_back (assigner.high + 1);
 
-  std::get<0> (m_storage)->assign (container, lhs, exp, indices,
-				   low_index, high_index);
+  assigner.container = container;
+  assigner.lhs = lhs;
+  assigner.exp = exp;
+
+  std::get<0> (m_storage)->assign (assigner);
 
   return container;
 }
@@ -9447,19 +9489,16 @@ ada_positional_component::dump (ui_file *stream, int depth)
    LOW, where HIGH is the upper bound.  Record the position in
    INDICES.  CONTAINER is as for assign_aggregate.  */
 void
-ada_positional_component::assign (struct value *container,
-				  struct value *lhs, struct expression *exp,
-				  std::vector<LONGEST> &indices,
-				  LONGEST low, LONGEST high)
+ada_positional_component::assign (aggregate_assigner &assigner)
 {
-  LONGEST ind = m_index + low;
+  LONGEST ind = m_index + assigner.low;
 
-  if (ind - 1 == high)
+  if (ind - 1 == assigner.high)
     warning (_("Extra components in aggregate ignored."));
-  if (ind <= high)
+  if (ind <= assigner.high)
     {
-      add_component_interval (ind, ind, indices);
-      assign_component (container, lhs, ind, exp, m_op);
+      assigner.add_interval (ind, ind);
+      assigner.assign (ind, m_op);
     }
 }
 
@@ -9478,23 +9517,21 @@ ada_discrete_range_association::dump (ui_file *stream, int depth)
 }
 
 void
-ada_discrete_range_association::assign (struct value *container,
-					struct value *lhs,
-					struct expression *exp,
-					std::vector<LONGEST> &indices,
-					LONGEST low, LONGEST high,
+ada_discrete_range_association::assign (aggregate_assigner &assigner,
 					operation_up &op)
 {
-  LONGEST lower = value_as_long (m_low->evaluate (nullptr, exp, EVAL_NORMAL));
-  LONGEST upper = value_as_long (m_high->evaluate (nullptr, exp, EVAL_NORMAL));
+  LONGEST lower = value_as_long (m_low->evaluate (nullptr, assigner.exp,
+						  EVAL_NORMAL));
+  LONGEST upper = value_as_long (m_high->evaluate (nullptr, assigner.exp,
+						   EVAL_NORMAL));
 
-  if (lower <= upper && (lower < low || upper > high))
+  if (lower <= upper && (lower < assigner.low || upper > assigner.high))
     error (_("Index in component association out of bounds."));
 
-  add_component_interval (lower, upper, indices);
+  assigner.add_interval (lower, upper);
   while (lower <= upper)
     {
-      assign_component (container, lhs, lower, exp, op);
+      assigner.assign (lower, op);
       lower += 1;
     }
 }
@@ -9513,18 +9550,16 @@ ada_name_association::dump (ui_file *stream, int depth)
 }
 
 void
-ada_name_association::assign (struct value *container,
-			      struct value *lhs,
-			      struct expression *exp,
-			      std::vector<LONGEST> &indices,
-			      LONGEST low, LONGEST high,
+ada_name_association::assign (aggregate_assigner &assigner,
 			      operation_up &op)
 {
   int index;
 
-  if (ada_is_direct_array_type (lhs->type ()))
-    index = longest_to_int (value_as_long (m_val->evaluate (nullptr, exp,
-							    EVAL_NORMAL)));
+  if (ada_is_direct_array_type (assigner.lhs->type ()))
+    {
+      value *tem = m_val->evaluate (nullptr, assigner.exp, EVAL_NORMAL);
+      index = longest_to_int (value_as_long (tem));
+    }
   else
     {
       ada_string_operation *strop
@@ -9550,13 +9585,13 @@ ada_name_association::assign (struct value *container,
 	}
 
       index = 0;
-      if (! find_struct_field (name, lhs->type (), 0,
+      if (! find_struct_field (name, assigner.lhs->type (), 0,
 			       NULL, NULL, NULL, NULL, &index))
 	error (_("Unknown component name: %s."), name);
     }
 
-  add_component_interval (index, index, indices);
-  assign_component (container, lhs, index, exp, op);
+  assigner.add_interval (index, index);
+  assigner.assign (index, op);
 }
 
 bool
@@ -9573,8 +9608,15 @@ ada_choices_component::uses_objfile (struct objfile *objfile)
 void
 ada_choices_component::dump (ui_file *stream, int depth)
 {
-  gdb_printf (stream, _("%*sChoices:\n"), depth, "");
+  if (m_name.empty ())
+    gdb_printf (stream, _("%*sChoices:\n"), depth, "");
+  else
+    {
+      gdb_printf (stream, _("%*sIterated choices:\n"), depth, "");
+      gdb_printf (stream, _("%*sName: %s\n"), depth + 1, "", m_name.c_str ());
+    }
   m_op->dump (stream, depth + 1);
+
   for (const auto &item : m_assocs)
     item->dump (stream, depth + 1);
 }
@@ -9584,13 +9626,36 @@ ada_choices_component::dump (ui_file *stream, int depth)
    the allowable indices are LOW..HIGH.  Record the indices assigned
    to in INDICES.  CONTAINER is as for assign_aggregate.  */
 void
-ada_choices_component::assign (struct value *container,
-			       struct value *lhs, struct expression *exp,
-			       std::vector<LONGEST> &indices,
-			       LONGEST low, LONGEST high)
+ada_choices_component::assign (aggregate_assigner &assigner)
 {
+  scoped_restore save_index = make_scoped_restore (&m_assigner, &assigner);
   for (auto &item : m_assocs)
-    item->assign (container, lhs, exp, indices, low, high, m_op);
+    item->assign (assigner, m_op);
+}
+
+void
+ada_index_var_operation::dump (struct ui_file *stream, int depth) const
+{
+  gdb_printf (stream, _("%*sIndex variable: %s\n"), depth, "",
+	      m_var->name ().c_str ());
+}
+
+value *
+ada_index_var_operation::evaluate (struct type *expect_type,
+				   struct expression *exp,
+				   enum noside noside)
+{
+  if (noside == EVAL_AVOID_SIDE_EFFECTS)
+    {
+      /* Note that using an integer type here is incorrect -- the type
+	 should be the array's index type.  Unfortunately, though,
+	 this isn't currently available during parsing and type
+	 resolution.  */
+      struct type *index_type = builtin_type (exp->gdbarch)->builtin_int;
+      return value::zero (index_type, not_lval);
+    }
+
+  return m_var->current_value ();
 }
 
 bool
@@ -9611,16 +9676,15 @@ ada_others_component::dump (ui_file *stream, int depth)
    have not been previously assigned.  The index intervals already assigned
    are in INDICES.  CONTAINER is as for assign_aggregate.  */
 void
-ada_others_component::assign (struct value *container,
-			      struct value *lhs, struct expression *exp,
-			      std::vector<LONGEST> &indices,
-			      LONGEST low, LONGEST high)
+ada_others_component::assign (aggregate_assigner &assigner)
 {
-  int num_indices = indices.size ();
+  int num_indices = assigner.indices.size ();
   for (int i = 0; i < num_indices - 2; i += 2)
     {
-      for (LONGEST ind = indices[i + 1] + 1; ind < indices[i + 2]; ind += 1)
-	assign_component (container, lhs, ind, exp, m_op);
+      for (LONGEST ind = assigner.indices[i + 1] + 1;
+	   ind < assigner.indices[i + 2];
+	   ind += 1)
+	assigner.assign (ind, m_op);
     }
 }
 
@@ -9661,45 +9725,43 @@ ada_assign_operation::evaluate (struct type *expect_type,
   return ada_value_assign (arg1, arg2);
 }
 
-} /* namespace expr */
+/* See ada-exp.h.  */
 
-/* Add the interval [LOW .. HIGH] to the sorted set of intervals
-   [ INDICES[0] .. INDICES[1] ],...  The resulting intervals do not
-   overlap.  */
-static void
-add_component_interval (LONGEST low, LONGEST high, 
-			std::vector<LONGEST> &indices)
+void
+aggregate_assigner::add_interval (LONGEST from, LONGEST to)
 {
   int i, j;
 
   int size = indices.size ();
   for (i = 0; i < size; i += 2) {
-    if (high >= indices[i] && low <= indices[i + 1])
+    if (to >= indices[i] && from <= indices[i + 1])
       {
 	int kh;
 
 	for (kh = i + 2; kh < size; kh += 2)
-	  if (high < indices[kh])
+	  if (to < indices[kh])
 	    break;
-	if (low < indices[i])
-	  indices[i] = low;
+	if (from < indices[i])
+	  indices[i] = from;
 	indices[i + 1] = indices[kh - 1];
-	if (high > indices[i + 1])
-	  indices[i + 1] = high;
+	if (to > indices[i + 1])
+	  indices[i + 1] = to;
 	memcpy (indices.data () + i + 2, indices.data () + kh, size - kh);
 	indices.resize (kh - i - 2);
 	return;
       }
-    else if (high < indices[i])
+    else if (to < indices[i])
       break;
   }
 	
   indices.resize (indices.size () + 2);
   for (j = indices.size () - 1; j >= i + 2; j -= 1)
     indices[j] = indices[j - 2];
-  indices[i] = low;
-  indices[i + 1] = high;
+  indices[i] = from;
+  indices[i + 1] = to;
 }
+
+} /* namespace expr */
 
 /* Perform and Ada cast of ARG2 to type TYPE if the type of ARG2
    is different.  */
@@ -10930,12 +10992,18 @@ ada_unop_ind_operation::evaluate (struct type *expect_type,
   if (noside == EVAL_AVOID_SIDE_EFFECTS)
     {
       if (ada_is_array_descriptor_type (type))
-	/* GDB allows dereferencing GNAT array descriptors.  */
 	{
+	  /* GDB allows dereferencing GNAT array descriptors.
+	     However, for 'ptype' we don't want to try to
+	     "dereference" a thick pointer here -- that will end up
+	     giving us an array with (1 .. 0) for bounds, which is
+	     less clear than (<>).  */
 	  struct type *arrType = ada_type_of_array (arg1, 0);
 
 	  if (arrType == NULL)
 	    error (_("Attempt to dereference null array pointer."));
+	  if (is_thick_pntr (type))
+	    return arg1;
 	  return value_at_lazy (arrType, 0);
 	}
       else if (type->code () == TYPE_CODE_PTR
@@ -13816,7 +13884,7 @@ static struct cmd_list_element *show_ada_list;
 static void
 ada_new_objfile_observer (struct objfile *objfile)
 {
-  ada_clear_symbol_cache (objfile->pspace);
+  ada_clear_symbol_cache (objfile->pspace ());
 }
 
 /* This module's 'free_objfile' observer.  */
@@ -13824,7 +13892,7 @@ ada_new_objfile_observer (struct objfile *objfile)
 static void
 ada_free_objfile_observer (struct objfile *objfile)
 {
-  ada_clear_symbol_cache (objfile->pspace);
+  ada_clear_symbol_cache (objfile->pspace ());
 }
 
 /* Charsets known to GNAT.  */

@@ -13,20 +13,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import gdb
-import os
 import re
-
 from contextlib import contextmanager
 
 # These are deprecated in 3.9, but required in older versions.
 from typing import Optional, Sequence
 
-from .server import request, capability, send_event
-from .sources import make_source
-from .startup import in_gdb_thread, log_stack, parse_and_eval, LogLevel, DAPException
-from .typecheck import type_check
+import gdb
 
+from .server import capability, request, send_event
+from .sources import make_source
+from .startup import DAPException, LogLevel, in_gdb_thread, log_stack, parse_and_eval
+from .typecheck import type_check
 
 # True when suppressing new breakpoint events.
 _suppress_bp = False
@@ -117,7 +115,7 @@ def _breakpoint_descriptor(bp):
 
             result.update(
                 {
-                    "source": make_source(filename, os.path.basename(filename)),
+                    "source": make_source(filename),
                     "line": line,
                 }
             )
@@ -278,7 +276,6 @@ def _rewrite_src_breakpoint(
     }
 
 
-# FIXME we do not specify a type for 'source'.
 @request("setBreakpoints")
 @capability("supportsHitConditionalBreakpoints")
 @capability("supportsConditionalBreakpoints")

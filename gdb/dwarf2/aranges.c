@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "dwarf2/aranges.h"
 #include "dwarf2/read.h"
 
@@ -191,8 +190,6 @@ read_addrmap_from_aranges (dwarf2_per_objfile *per_objfile,
 	      continue;
 	    }
 	  ULONGEST end = start + length;
-	  start = (ULONGEST) per_objfile->adjust ((unrelocated_addr) start);
-	  end = (ULONGEST) per_objfile->adjust ((unrelocated_addr) end);
 	  mutable_map->set_empty (start, end - 1, per_cu);
 	}
 

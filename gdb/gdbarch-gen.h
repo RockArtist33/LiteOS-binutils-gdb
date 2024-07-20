@@ -547,8 +547,8 @@ typedef CORE_ADDR (gdbarch_skip_entrypoint_ftype) (struct gdbarch *gdbarch, CORE
 extern CORE_ADDR gdbarch_skip_entrypoint (struct gdbarch *gdbarch, CORE_ADDR ip);
 extern void set_gdbarch_skip_entrypoint (struct gdbarch *gdbarch, gdbarch_skip_entrypoint_ftype *skip_entrypoint);
 
-typedef int (gdbarch_inner_than_ftype) (CORE_ADDR lhs, CORE_ADDR rhs);
-extern int gdbarch_inner_than (struct gdbarch *gdbarch, CORE_ADDR lhs, CORE_ADDR rhs);
+typedef bool (gdbarch_inner_than_ftype) (CORE_ADDR lhs, CORE_ADDR rhs);
+extern bool gdbarch_inner_than (struct gdbarch *gdbarch, CORE_ADDR lhs, CORE_ADDR rhs);
 extern void set_gdbarch_inner_than (struct gdbarch *gdbarch, gdbarch_inner_than_ftype *inner_than);
 
 typedef const gdb_byte * (gdbarch_breakpoint_from_pc_ftype) (struct gdbarch *gdbarch, CORE_ADDR *pcptr, int *lenptr);
@@ -707,8 +707,8 @@ extern void set_gdbarch_memtag_to_string (struct gdbarch *gdbarch, gdbarch_memta
 /* Return true if ADDRESS contains a tag and false otherwise.  ADDRESS
    must be either a pointer or a reference type. */
 
-typedef bool (gdbarch_tagged_address_p_ftype) (struct gdbarch *gdbarch, struct value *address);
-extern bool gdbarch_tagged_address_p (struct gdbarch *gdbarch, struct value *address);
+typedef bool (gdbarch_tagged_address_p_ftype) (struct gdbarch *gdbarch, CORE_ADDR address);
+extern bool gdbarch_tagged_address_p (struct gdbarch *gdbarch, CORE_ADDR address);
 extern void set_gdbarch_tagged_address_p (struct gdbarch *gdbarch, gdbarch_tagged_address_p_ftype *tagged_address_p);
 
 /* Return true if the tag from ADDRESS matches the memory tag for that
@@ -1715,8 +1715,8 @@ extern void set_gdbarch_addressable_memory_unit_size (struct gdbarch *gdbarch, g
 extern const char * gdbarch_disassembler_options_implicit (struct gdbarch *gdbarch);
 extern void set_gdbarch_disassembler_options_implicit (struct gdbarch *gdbarch, const char * disassembler_options_implicit);
 
-extern char ** gdbarch_disassembler_options (struct gdbarch *gdbarch);
-extern void set_gdbarch_disassembler_options (struct gdbarch *gdbarch, char ** disassembler_options);
+extern std::string * gdbarch_disassembler_options (struct gdbarch *gdbarch);
+extern void set_gdbarch_disassembler_options (struct gdbarch *gdbarch, std::string * disassembler_options);
 
 extern const disasm_options_and_args_t * gdbarch_valid_disassembler_options (struct gdbarch *gdbarch);
 extern void set_gdbarch_valid_disassembler_options (struct gdbarch *gdbarch, const disasm_options_and_args_t * valid_disassembler_options);

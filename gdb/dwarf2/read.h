@@ -534,9 +534,6 @@ public:
   std::unordered_map<sect_offset, std::vector<sect_offset>,
 		     gdb::hash_enum<sect_offset>>
     abstract_to_concrete;
-
-  /* The address map that is used by the DWARF index code.  */
-  struct addrmap *index_addrmap = nullptr;
 };
 
 /* An iterator for all_units that is based on index.  This
@@ -692,10 +689,6 @@ struct dwarf2_per_objfile
      any that are too old.  */
   void age_comp_units ();
 
-  /* Apply any needed adjustments to ADDR, returning an adjusted but
-     still unrelocated address.  */
-  unrelocated_addr adjust (unrelocated_addr addr);
-
   /* Apply any needed adjustments to ADDR and then relocate the
      address according to the objfile's section offsets, returning a
      relocated address.  */
@@ -849,11 +842,6 @@ struct dwarf2_base_index_functions : public quick_symbol_functions
   void print_stats (struct objfile *objfile, bool print_bcache) override;
 
   void expand_all_symtabs (struct objfile *objfile) override;
-
-  /* A helper function that finds the per-cu object from an "adjusted"
-     PC -- a PC with the base text offset removed.  */
-  virtual dwarf2_per_cu_data *find_per_cu (dwarf2_per_bfd *per_bfd,
-					   unrelocated_addr adjusted_pc);
 
   struct compunit_symtab *find_pc_sect_compunit_symtab
     (struct objfile *objfile, struct bound_minimal_symbol msymbol,

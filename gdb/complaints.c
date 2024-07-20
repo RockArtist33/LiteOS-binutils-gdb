@@ -17,14 +17,16 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "complaints.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "run-on-main-thread.h"
+#include "top.h"
 #include "gdbsupport/selftest.h"
 #include <unordered_map>
+#if CXX_STD_THREAD
 #include <mutex>
+#endif
 
 /* Map format strings to counters.  */
 
@@ -59,7 +61,7 @@ complaint_internal (const char *fmt, ...)
 
   warning_hook_handler handler = get_warning_hook_handler ();
   if (handler != nullptr)
-    handler (fmt, args);
+    handler->warn (fmt, args);
   else
     {
       gdb_puts (_("During symbol reading: "), gdb_stderr);
@@ -86,7 +88,7 @@ thread_local complaint_interceptor *complaint_interceptor::g_complaint_intercept
 
 complaint_interceptor::complaint_interceptor ()
   : m_saved_complaint_interceptor (&g_complaint_interceptor, this),
-    m_saved_warning_hook (issue_complaint)
+    m_saved_warning_hook (this)
 {
 }
 
@@ -97,7 +99,7 @@ wrap_warning_hook (warning_hook_handler hook, ...)
 {
   va_list args;
   va_start (args, hook);
-  hook ("%s", args);
+  hook->warn ("%s", args);
   va_end (args);
 }
 
@@ -122,7 +124,7 @@ re_emit_complaints (const complaint_collection &complaints)
 /* See complaints.h.  */
 
 void
-complaint_interceptor::issue_complaint (const char *fmt, va_list args)
+complaint_interceptor::warn (const char *fmt, va_list args)
 {
 #if CXX_STD_THREAD
   std::lock_guard<std::mutex> guard (complaint_mutex);

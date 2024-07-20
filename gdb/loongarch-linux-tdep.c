@@ -18,7 +18,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "glibc-tdep.h"
 #include "inferior.h"
 #include "linux-tdep.h"
@@ -27,6 +27,10 @@
 #include "target-descriptions.h"
 #include "trad-frame.h"
 #include "tramp-frame.h"
+#include "xml-syscall.h"
+
+/* The syscall's XML filename for LoongArch.  */
+#define XML_SYSCALL_FILENAME_LOONGARCH "syscalls/loongarch-linux.xml"
 
 /* Unpack an elf_gregset_t into GDB's register cache.  */
 
@@ -488,28 +492,31 @@ loongarch_iterate_over_regset_sections (struct gdbarch *gdbarch,
 					const struct regcache *regcache)
 {
   int gprsize = register_size (gdbarch, 0);
+  int gpsize = gprsize * LOONGARCH_LINUX_NUM_GREGSET;
   int fprsize = register_size (gdbarch, LOONGARCH_FIRST_FP_REGNUM);
   int fccsize = register_size (gdbarch, LOONGARCH_FIRST_FCC_REGNUM);
   int fcsrsize = register_size (gdbarch, LOONGARCH_FCSR_REGNUM);
   int fpsize = fprsize * LOONGARCH_LINUX_NUM_FPREGSET +
-    fccsize * LOONGARCH_LINUX_NUM_FCC + fcsrsize;
+	       fccsize * LOONGARCH_LINUX_NUM_FCC + fcsrsize;
   int lsxrsize = register_size (gdbarch, LOONGARCH_FIRST_LSX_REGNUM);
+  int lsxsize = lsxrsize * LOONGARCH_LINUX_NUM_LSXREGSET;
   int lasxrsize = register_size (gdbarch, LOONGARCH_FIRST_LASX_REGNUM);
+  int lasxsize = lasxrsize * LOONGARCH_LINUX_NUM_LASXREGSET;
   int scrsize = register_size (gdbarch, LOONGARCH_FIRST_SCR_REGNUM);
   int eflagssize = register_size (gdbarch, LOONGARCH_EFLAGS_REGNUM);
   int ftopsize = register_size (gdbarch, LOONGARCH_FTOP_REGNUM);
   int lbtsize = scrsize * LOONGARCH_LINUX_NUM_SCR + eflagssize + ftopsize;
 
-  cb (".reg", LOONGARCH_LINUX_NUM_GREGSET * gprsize,
-      LOONGARCH_LINUX_NUM_GREGSET * gprsize, &loongarch_gregset, nullptr, cb_data);
-  cb (".reg2", fpsize, fpsize, &loongarch_fpregset, nullptr, cb_data);
-  cb (".reg-loongarch-lsx", lsxrsize, lsxrsize,
+  cb (".reg", gpsize, gpsize,
+      &loongarch_gregset, nullptr, cb_data);
+  cb (".reg2", fpsize, fpsize,
+      &loongarch_fpregset, nullptr, cb_data);
+  cb (".reg-loongarch-lsx", lsxsize, lsxsize,
       &loongarch_lsxregset, nullptr, cb_data);
-  cb (".reg-loongarch-lasx", lasxrsize, lasxrsize,
+  cb (".reg-loongarch-lasx", lasxsize, lasxsize,
       &loongarch_lasxregset, nullptr, cb_data);
   cb (".reg-loongarch-lbt", lbtsize, lbtsize,
       &loongarch_lbtregset, nullptr, cb_data);
-
 }
 
 /* The following value is derived from __NR_rt_sigreturn in
@@ -589,6 +596,9 @@ loongarch_linux_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
   set_gdbarch_iterate_over_regset_sections (gdbarch, loongarch_iterate_over_regset_sections);
 
   tdep->syscall_next_pc = loongarch_linux_syscall_next_pc;
+
+  /* Set the correct XML syscall filename.  */
+  set_xml_syscall_file_name (gdbarch, XML_SYSCALL_FILENAME_LOONGARCH);
 
   /* Get the syscall number from the arch's register.  */
   set_gdbarch_get_syscall_number (gdbarch, loongarch_linux_get_syscall_number);

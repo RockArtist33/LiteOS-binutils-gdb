@@ -17,13 +17,14 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include <signal.h>
 #include <fcntl.h>
+#include "event-top.h"
+#include "extract-store-integer.h"
 #include "inferior.h"
 #include "symtab.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "bfd.h"
 #include "target.h"
 #include "gdbcore.h"
@@ -74,21 +75,6 @@ validate_files (void)
 	warning (_("exec file is newer than core file."));
     }
 }
-
-/* See gdbsupport/common-inferior.h.  */
-
-const char *
-get_exec_file (int err)
-{
-  if (current_program_space->exec_filename != nullptr)
-    return current_program_space->exec_filename.get ();
-  if (!err)
-    return NULL;
-
-  error (_("No executable file specified.\n\
-Use the \"file\" or \"exec-file\" command."));
-}
-
 
 std::string
 memory_error_message (enum target_xfer_status err,

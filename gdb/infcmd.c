@@ -17,8 +17,8 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
+#include "exceptions.h"
 #include "symtab.h"
 #include "gdbtypes.h"
 #include "frame.h"
@@ -26,7 +26,7 @@
 #include "infrun.h"
 #include "gdbsupport/environ.h"
 #include "value.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "symfile.h"
 #include "gdbcore.h"
 #include "target.h"
@@ -55,7 +55,6 @@
 #include <optional>
 #include "source.h"
 #include "cli/cli-style.h"
-#include "dwarf2/loc.h"
 
 /* Local functions: */
 
@@ -369,7 +368,6 @@ enum run_how
 static void
 run_command_1 (const char *args, int from_tty, enum run_how run_how)
 {
-  const char *exec_file;
   struct ui_out *uiout = current_uiout;
   struct target_ops *run_target;
   int async_exec;
@@ -385,7 +383,7 @@ run_command_1 (const char *args, int from_tty, enum run_how run_how)
 
   /* Clean up any leftovers from other runs.  Some other things from
      this function should probably be moved into target_pre_inferior.  */
-  target_pre_inferior (from_tty);
+  target_pre_inferior ();
 
   /* The comment here used to read, "The exec file is re-read every
      time we do a generic_mourn_inferior, so we just have to worry
@@ -423,7 +421,7 @@ run_command_1 (const char *args, int from_tty, enum run_how run_how)
       tbreak_command (arg.c_str (), 0);
     }
 
-  exec_file = get_exec_file (0);
+  const char *exec_file = current_program_space->exec_filename ();
 
   /* We keep symbols from add-symbol-file, on the grounds that the
      user might want to add some symbols before running the program
@@ -521,7 +519,7 @@ start_command (const char *args, int from_tty)
   /* Some languages such as Ada need to search inside the program
      minimal symbols for the location where to put the temporary
      breakpoint before starting.  */
-  if (!have_minimal_symbols ())
+  if (!have_minimal_symbols (current_program_space))
     error (_("No symbol table loaded.  Use the \"file\" command."));
 
   /* Run the program until reaching the main procedure...  */
@@ -1080,7 +1078,8 @@ jump_command (const char *arg, int from_tty)
     {
       /* If multiple sal-objects were found, try dropping those that aren't
 	 from the current symtab.  */
-      struct symtab_and_line cursal = get_current_source_symtab_and_line ();
+      symtab_and_line cursal
+	= get_current_source_symtab_and_line (current_program_space);
       sals.erase (std::remove_if (sals.begin (), sals.end (),
 		  [&] (const symtab_and_line &sal)
 		    {
@@ -1483,23 +1482,6 @@ get_return_value (struct symbol *func_symbol, struct value *function)
 
   return value;
 }
-
-/* The captured function return value/type and its position in the
-   value history.  */
-
-struct return_value_info
-{
-  /* The captured return value.  May be NULL if we weren't able to
-     retrieve it.  See get_return_value.  */
-  struct value *value;
-
-  /* The return type.  In some cases, we'll not be able extract the
-     return value, but we always know the type.  */
-  struct type *type;
-
-  /* If we captured a value, this is the value history index.  */
-  int value_history_index;
-};
 
 /* Helper for print_return_value.  */
 
@@ -2516,7 +2498,7 @@ setup_inferior (int from_tty)
 
   /* If no exec file is yet known, try to determine it from the
      process itself.  */
-  if (get_exec_file (0) == nullptr)
+  if (current_program_space->exec_filename () == nullptr)
     exec_file_locate_attach (inferior_ptid.pid (), 1, from_tty);
   else
     {
@@ -2647,7 +2629,7 @@ attach_command (const char *args, int from_tty)
 
   /* Clean up any leftovers from other runs.  Some other things from
      this function should probably be moved into target_pre_inferior.  */
-  target_pre_inferior (from_tty);
+  target_pre_inferior ();
 
   gdb::unique_xmalloc_ptr<char> stripped = strip_bg_char (args, &async_exec);
   args = stripped.get ();
@@ -2846,7 +2828,7 @@ detach_command (const char *args, int from_tty)
   /* If the solist is global across inferiors, don't clear it when we
      detach from a single inferior.  */
   if (!gdbarch_has_global_solist (inf->arch ()))
-    no_shared_libraries (nullptr, from_tty);
+    no_shared_libraries (inf->pspace);
 
   if (deprecated_detach_hook)
     deprecated_detach_hook ();
@@ -2872,7 +2854,7 @@ disconnect_command (const char *args, int from_tty)
   query_if_trace_running (from_tty);
   disconnect_tracing ();
   target_disconnect (args, from_tty);
-  no_shared_libraries (nullptr, from_tty);
+  no_shared_libraries (current_program_space);
   init_thread_list ();
   update_previous_thread ();
   if (deprecated_detach_hook)
@@ -3095,7 +3077,7 @@ shell that will start the program (specified by the \"$SHELL\" environment\n\
 variable).  Input and output redirection with \">\", \"<\", or \">>\"\n\
 are also allowed.\n\
 \n\
-With no arguments, uses arguments last specified (with \"run\" or \n\
+With no arguments, uses arguments last specified (with \"run\" or\n\
 \"set args\").  To cancel previous arguments and run with no arguments,\n\
 use \"set args\" without arguments.\n\
 \n\
@@ -3111,10 +3093,10 @@ _initialize_infcmd ()
   /* Add the filename of the terminal connected to inferior I/O.  */
   auto tty_set_show
     = add_setshow_optional_filename_cmd ("inferior-tty", class_run, _("\
-Set terminal for future runs of program being debugged."), _("		\
-Show terminal for future runs of program being debugged."), _("		\
-Usage: set inferior-tty [TTY]\n\n					\
-If TTY is omitted, the default behavior of using the same terminal as GDB\n \
+Set terminal for future runs of program being debugged."), _("\
+Show terminal for future runs of program being debugged."), _("\
+Usage: set inferior-tty [TTY]\n\n\
+If TTY is omitted, the default behavior of using the same terminal as GDB\n\
 is restored."),
 					 set_tty_value,
 					 get_tty_value,
@@ -3135,8 +3117,8 @@ Follow this command with any number of args, to be passed to the program."),
 
   auto cwd_set_show
     = add_setshow_string_noescape_cmd ("cwd", class_run, _("\
-Set the current working directory to be used when the inferior is started.\n \
-Changing this setting does not have any effect on inferiors that are\n	\
+Set the current working directory to be used when the inferior is started.\n\
+Changing this setting does not have any effect on inferiors that are\n\
 already running."),
 				       _("\
 Show the current working directory that is used when the inferior is started."),
@@ -3321,7 +3303,7 @@ which means to set the ignore count of that breakpoint to N - 1 (so that\n\
 the breakpoint won't break until the Nth time it is reached).\n\
 \n\
 If non-stop mode is enabled, continue only the current thread,\n\
-otherwise all the threads in the program are continued.  To \n\
+otherwise all the threads in the program are continued.  To\n\
 continue all stopped threads in non-stop mode, use the -a option.\n\
 Specifying -a and an ignore count simultaneously is an error."));
   add_com_alias ("c", continue_cmd, class_run, 1);
@@ -3347,7 +3329,7 @@ RUN_ARGS_HELP));
   add_com ("interrupt", class_run, interrupt_command,
 	   _("Interrupt the execution of the debugged program.\n\
 If non-stop mode is enabled, interrupt only the current thread,\n\
-otherwise all the threads in the program are stopped.  To \n\
+otherwise all the threads in the program are stopped.  To\n\
 interrupt all running threads in non-stop mode, use the -a option."));
 
   cmd_list_element *info_registers_cmd

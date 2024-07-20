@@ -13892,12 +13892,7 @@ elf32_arm_object_p (bfd *abfd)
   mach = bfd_arm_get_mach_from_notes (abfd, ARM_NOTE_SECTION);
 
   if (mach == bfd_mach_arm_unknown)
-    {
-      if (elf_elfheader (abfd)->e_flags & EF_ARM_MAVERICK_FLOAT)
-	mach = bfd_mach_arm_ep9312;
-      else
-	mach = bfd_arm_get_mach_from_attributes (abfd);
-    }
+    mach = bfd_arm_get_mach_from_attributes (abfd);
 
   bfd_default_set_arch_mach (abfd, bfd_arch_arm, mach);
   return true;
@@ -15136,8 +15131,6 @@ elf32_arm_print_private_bfd_data (bfd *abfd, void * ptr)
 
       if (flags & EF_ARM_VFP_FLOAT)
 	fprintf (file, _(" [VFP float format]"));
-      else if (flags & EF_ARM_MAVERICK_FLOAT)
-	fprintf (file, _(" [Maverick float format]"));
       else
 	fprintf (file, _(" [FPA float format]"));
 
@@ -15158,8 +15151,7 @@ elf32_arm_print_private_bfd_data (bfd *abfd, void * ptr)
 
       flags &= ~(EF_ARM_INTERWORK | EF_ARM_APCS_26 | EF_ARM_APCS_FLOAT
 		 | EF_ARM_PIC | EF_ARM_NEW_ABI | EF_ARM_OLD_ABI
-		 | EF_ARM_SOFT_FLOAT | EF_ARM_VFP_FLOAT
-		 | EF_ARM_MAVERICK_FLOAT);
+		 | EF_ARM_SOFT_FLOAT | EF_ARM_VFP_FLOAT);
       break;
 
     case EF_ARM_EABI_VER1:
@@ -16725,8 +16717,8 @@ bfd_elf32_arm_set_byteswap_code (struct bfd_link_info *info,
 /* Set the sizes of the dynamic sections.  */
 
 static bool
-elf32_arm_size_dynamic_sections (bfd * output_bfd ATTRIBUTE_UNUSED,
-				 struct bfd_link_info * info)
+elf32_arm_late_size_sections (bfd * output_bfd ATTRIBUTE_UNUSED,
+			      struct bfd_link_info * info)
 {
   bfd * dynobj;
   asection * s;
@@ -16739,7 +16731,9 @@ elf32_arm_size_dynamic_sections (bfd * output_bfd ATTRIBUTE_UNUSED,
     return false;
 
   dynobj = elf_hash_table (info)->dynobj;
-  BFD_ASSERT (dynobj != NULL);
+  if (dynobj == NULL)
+    return true;
+
   check_use_blx (htab);
 
   if (elf_hash_table (info)->dynamic_sections_created)
@@ -17111,8 +17105,7 @@ elf32_arm_size_dynamic_sections (bfd * output_bfd ATTRIBUTE_UNUSED,
    _TLS_MODULE_BASE_, if needed.  */
 
 static bool
-elf32_arm_always_size_sections (bfd *output_bfd,
-				struct bfd_link_info *info)
+elf32_arm_early_size_sections (bfd *output_bfd, struct bfd_link_info *info)
 {
   asection *tls_sec;
   struct elf32_arm_link_hash_table *htab;
@@ -20312,8 +20305,8 @@ elf32_arm_backend_symbol_processing (bfd *abfd, asymbol *sym)
 #define elf_backend_create_dynamic_sections	elf32_arm_create_dynamic_sections
 #define elf_backend_finish_dynamic_symbol	elf32_arm_finish_dynamic_symbol
 #define elf_backend_finish_dynamic_sections	elf32_arm_finish_dynamic_sections
-#define elf_backend_size_dynamic_sections	elf32_arm_size_dynamic_sections
-#define elf_backend_always_size_sections	elf32_arm_always_size_sections
+#define elf_backend_late_size_sections		elf32_arm_late_size_sections
+#define elf_backend_early_size_sections		elf32_arm_early_size_sections
 #define elf_backend_init_index_section		_bfd_elf_init_2_index_sections
 #define elf_backend_init_file_header		elf32_arm_init_file_header
 #define elf_backend_reloc_type_class		elf32_arm_reloc_type_class
@@ -20758,20 +20751,6 @@ elf32_arm_merge_private_bfd_data (bfd *ibfd, struct bfd_link_info *info)
 	    _bfd_error_handler
 	      (_("error: %pB uses %s instructions, whereas %pB does not"),
 	       ibfd, "FPA", obfd);
-
-	  flags_compatible = false;
-	}
-
-      if ((in_flags & EF_ARM_MAVERICK_FLOAT) != (out_flags & EF_ARM_MAVERICK_FLOAT))
-	{
-	  if (in_flags & EF_ARM_MAVERICK_FLOAT)
-	    _bfd_error_handler
-	      (_("error: %pB uses %s instructions, whereas %pB does not"),
-	       ibfd, "Maverick", obfd);
-	  else
-	    _bfd_error_handler
-	      (_("error: %pB does not use %s instructions, whereas %pB does"),
-	       ibfd, "Maverick", obfd);
 
 	  flags_compatible = false;
 	}

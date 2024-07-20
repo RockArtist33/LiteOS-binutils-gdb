@@ -1244,7 +1244,7 @@ extern gdb::array_view<const struct symbol_impl> symbol_impls;
 
 /* This structure is space critical.  See space comments at the top.  */
 
-struct symbol : public general_symbol_info, public allocate_on_obstack
+struct symbol : public general_symbol_info, public allocate_on_obstack<symbol>
 {
   symbol ()
     /* Class-initialization of bitfields is only allowed in C++20.  */
@@ -1346,7 +1346,11 @@ struct symbol : public general_symbol_info, public allocate_on_obstack
     m_is_inlined = is_inlined;
   }
 
-  bool is_cplus_template_function () const
+  /* Return true if this symbol is a template function.  Template
+     functions actually are of type 'template_symbol' and have extra
+     symbols (the template parameters) attached.  */
+
+  bool is_template_function () const
   {
     return this->subclass == SYMBOL_TEMPLATE;
   }
@@ -1593,7 +1597,7 @@ extern int register_symbol_register_impl (enum address_class,
 
 /* An instance of this type is used to represent a C++ template
    function.  A symbol is really of this type iff
-   symbol::is_cplus_template_function is true.  */
+   symbol::is_template_function is true.  */
 
 struct template_symbol : public symbol
 {
@@ -1735,19 +1739,31 @@ struct symtab
     m_language = language;
   }
 
+  /* Return the current full name of this symtab.  */
+  const char *fullname () const
+  { return m_fullname; }
+
+  /* Transfer ownership of the current full name to the caller.  The
+     full name is reset to nullptr.  */
+  gdb::unique_xmalloc_ptr<char> release_fullname ()
+  {
+    gdb::unique_xmalloc_ptr<char> result (m_fullname);
+    m_fullname = nullptr;
+    return result;
+  }
+
+  /* Set the current full name to NAME, transferring ownership to this
+     symtab.  */
+  void set_fullname (gdb::unique_xmalloc_ptr<char> name)
+  {
+    gdb_assert (m_fullname == nullptr);
+    m_fullname = name.release ();
+  }
+
   /* Unordered chain of all filetabs in the compunit,  with the exception
      that the "main" source file is the first entry in the list.  */
 
   struct symtab *next;
-
-  /* Backlink to containing compunit symtab.  */
-
-  struct compunit_symtab *m_compunit;
-
-  /* Table mapping core addresses to line numbers for this file.
-     Can be NULL if none.  Never shared between different symtabs.  */
-
-  const struct linetable *m_linetable;
 
   /* Name of this source file, in a form appropriate to print to the user.
 
@@ -1765,6 +1781,17 @@ struct symtab
      This pointer is never nullptr.*/
   const char *filename_for_id;
 
+private:
+
+  /* Backlink to containing compunit symtab.  */
+
+  struct compunit_symtab *m_compunit;
+
+  /* Table mapping core addresses to line numbers for this file.
+     Can be NULL if none.  Never shared between different symtabs.  */
+
+  const struct linetable *m_linetable;
+
   /* Language of this source file.  */
 
   enum language m_language;
@@ -1772,7 +1799,7 @@ struct symtab
   /* Full name of file as found by searching the source path.
      NULL if not yet known.  */
 
-  char *fullname;
+  char *m_fullname;
 };
 
 /* A range adapter to allowing iterating over all the file tables in a list.  */
@@ -1930,13 +1957,22 @@ struct compunit_symtab
   symtab *primary_filetab () const;
 
   /* Set m_call_site_htab.  */
-  void set_call_site_htab (htab_t call_site_htab);
+  void set_call_site_htab (htab_up call_site_htab);
 
   /* Find call_site info for PC.  */
   call_site *find_call_site (CORE_ADDR pc) const;
 
   /* Return the language of this compunit_symtab.  */
   enum language language () const;
+
+  /* Clear any cached source file names.  */
+  void forget_cached_source_info ();
+
+  /* This is called when an objfile is being destroyed and will free
+     any resources used by this compunit_symtab.  Normally a
+     destructor would be used instead, but at the moment
+     compunit_symtab objects are allocated on an obstack.  */
+  void finalize ();
 
   /* Unordered chain of all compunit symtabs of this objfile.  */
   struct compunit_symtab *next;
@@ -2307,9 +2343,11 @@ extern void reread_symbols (int from_tty);
    The type returned must not be opaque -- i.e., must have at least one field
    defined.  */
 
-extern struct type *lookup_transparent_type (const char *);
+extern struct type *lookup_transparent_type
+    (const char *name, domain_search_flags flags = SEARCH_STRUCT_DOMAIN);
 
-extern struct type *basic_lookup_transparent_type (const char *);
+extern struct type *basic_lookup_transparent_type
+     (const char *name, domain_search_flags flags = SEARCH_STRUCT_DOMAIN);
 
 /* Macro for name of symbol to indicate a file compiled with gcc.  */
 #ifndef GCC_COMPILED_FLAG_SYMBOL
@@ -2610,12 +2648,14 @@ public:
      removed.  */
   std::vector<symbol_search> search () const;
 
-  /* The set of source files to search in for matching symbols.  This is
-     currently public so that it can be populated after this object has
-     been constructed.  */
-  std::vector<const char *> filenames;
+  /* Add a filename to the list of file names to search.  */
+  void add_filename (gdb::unique_xmalloc_ptr<char> filename)
+  { m_filenames.push_back (std::move (filename)); }
 
 private:
+  /* The set of source files to search in for matching symbols.  */
+  std::vector<gdb::unique_xmalloc_ptr<char>> m_filenames;
+
   /* The kind of symbols are we searching for.
      VARIABLES_DOMAIN - Search all symbols, excluding functions, type
 			names, and constants (enums).
@@ -2971,5 +3011,12 @@ extern void info_sources_worker (struct ui_out *uiout,
    linetable.  */
 
 std::optional<CORE_ADDR> find_epilogue_using_linetable (CORE_ADDR func_addr);
+
+/* Search an array of symbols for one named NAME.  Name comparison is
+   done using strcmp -- i.e., this is only useful for simple names.
+   Returns the symbol, if found, or nullptr if not.  */
+
+extern struct symbol *search_symbol_list (const char *name, int num,
+					  struct symbol **syms);
 
 #endif /* !defined(SYMTAB_H) */

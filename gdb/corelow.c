@@ -17,10 +17,10 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
 #include <signal.h>
 #include <fcntl.h>
+#include "exceptions.h"
 #include "frame.h"
 #include "inferior.h"
 #include "infrun.h"
@@ -51,7 +51,7 @@
 #include "debuginfod-support.h"
 #include <unordered_map>
 #include <unordered_set>
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "xml-tdesc.h"
 #include "memtag.h"
 
@@ -109,6 +109,10 @@ public:
      core file notes.  */
   bool fetch_memtags (CORE_ADDR address, size_t len,
 		      gdb::byte_vector &tags, int type) override;
+
+  /* If the architecture supports it, check if ADDRESS is within a memory range
+     mapped with tags.  For example,  MTE tags for AArch64.  */
+  bool is_address_tagged (gdbarch *gdbarch, CORE_ADDR address) override;
 
   x86_xsave_layout fetch_x86_xsave_layout () override;
 
@@ -622,7 +626,7 @@ core_target_open (const char *arg, int from_tty)
   gdb::unique_xmalloc_ptr<char> filename (tilde_expand (arg));
   if (strlen (filename.get ()) != 0
       && !IS_ABSOLUTE_PATH (filename.get ()))
-    filename = make_unique_xstrdup (gdb_abspath (filename.get ()).c_str ());
+    filename = make_unique_xstrdup (gdb_abspath (filename).c_str ());
 
   flags = O_BINARY | O_LARGEFILE;
   if (write_files)
@@ -991,9 +995,9 @@ core_target::xfer_memory_via_mappings (gdb_byte *readbuf,
 
   for (const auto &mr : m_core_unavailable_mappings)
     {
-      if (address_in_mem_range (memaddr, &mr))
+      if (mr.contains (memaddr))
 	{
-	  if (!address_in_mem_range (memend, &mr))
+	  if (!mr.contains (memend))
 	    len = mr.start + mr.length - memaddr;
 
 	  xfer_status = this->beneath ()->xfer_partial (TARGET_OBJECT_MEMORY,
@@ -1409,6 +1413,12 @@ core_target::fetch_memtags (CORE_ADDR address, size_t len,
   }
 
   return false;
+}
+
+bool
+core_target::is_address_tagged (gdbarch *gdbarch, CORE_ADDR address)
+{
+  return gdbarch_tagged_address_p (gdbarch, address);
 }
 
 /* Implementation of the "fetch_x86_xsave_layout" target_ops method.  */

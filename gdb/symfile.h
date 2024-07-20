@@ -371,6 +371,25 @@ extern gdb_bfd_ref_ptr find_separate_debug_file_in_section (struct objfile *);
 
 extern bool separate_debug_file_debug;
 
+/* Print a "separate-debug-file" debug statement.  */
+
+#define separate_debug_file_debug_printf(fmt, ...)		\
+  debug_prefixed_printf_cond (separate_debug_file_debug,	\
+			      "separate-debug-file",		\
+			      fmt, ##__VA_ARGS__)
+
+/* Print "separate-debug-file" enter/exit debug statements.  */
+
+#define SEPARATE_DEBUG_FILE_SCOPED_DEBUG_ENTER_EXIT \
+  scoped_debug_enter_exit (separate_debug_file_debug,	\
+			   "separate-debug-file")
+
+/* Print "separate-debug-file" start/end debug statements.  */
+
+#define SEPARATE_DEBUG_FILE_SCOPED_DEBUG_START_END(fmt, ...) \
+  scoped_debug_start_end (separate_debug_file_debug,	     \
+			  "separate-debug-file", fmt, ##__VA_ARGS__)
+
 /* Read full symbols immediately.  */
 
 extern int readnow_symbol_files;
@@ -378,5 +397,21 @@ extern int readnow_symbol_files;
 /* Never read full symbols.  */
 
 extern int readnever_symbol_files;
+
+/* This is the symbol-file command.  Read the file, analyze its
+   symbols, and add a struct symtab to a symtab list.  The syntax of
+   the command is rather bizarre:
+
+   1. The function buildargv implements various quoting conventions
+   which are undocumented and have little or nothing in common with
+   the way things are quoted (or not quoted) elsewhere in GDB.
+
+   2. Options are used, which are not generally used in GDB (perhaps
+   "set mapped on", "set readnow on" would be better)
+
+   3. The order of options matters, which is contrary to GNU
+   conventions (because it is confusing and inconvenient).  */
+
+extern void symbol_file_command (const char *, int);
 
 #endif /* !defined(SYMFILE_H) */

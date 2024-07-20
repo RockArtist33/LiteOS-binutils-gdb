@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "symtab.h"
 #include "symfile.h"
 #include "gdbtypes.h"
@@ -25,7 +24,7 @@
 #include "value.h"
 #include "expression.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "frame.h"
 #include "target.h"
 #include "ax.h"

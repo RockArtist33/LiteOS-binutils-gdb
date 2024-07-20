@@ -18,14 +18,13 @@
 
 /* Much of this file is shamelessly copied from or1k-tdep.c and others.  */
 
-#include "defs.h"
 
 #include "arch-utils.h"
 #include "dwarf2/frame.h"
 #include "gdbsupport/errors.h"
 #include "frame-unwind.h"
 #include "gdbcore.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "inferior.h"
 #include "opcode/s12z.h"
 #include "trad-frame.h"

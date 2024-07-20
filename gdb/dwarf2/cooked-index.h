@@ -35,6 +35,7 @@
 #include "dwarf2/read.h"
 #include "dwarf2/tag.h"
 #include "dwarf2/abbrev-cache.h"
+#include "dwarf2/parent-map.h"
 #include "gdbsupport/range-chain.h"
 #include "gdbsupport/task-group.h"
 #include "complaints.h"
@@ -72,7 +73,7 @@ DEF_ENUM_FLAGS_TYPE (enum cooked_index_flag_enum, cooked_index_flag);
 
 union cooked_index_entry_ref
 {
-  cooked_index_entry_ref (CORE_ADDR deferred_)
+  cooked_index_entry_ref (parent_map::addr_type deferred_)
   {
     deferred = deferred_;
   }
@@ -83,7 +84,7 @@ union cooked_index_entry_ref
   }
 
   const cooked_index_entry *resolved;
-  CORE_ADDR deferred;
+  parent_map::addr_type deferred;
 };
 
 /* Return a string representation of FLAGS.  */
@@ -104,7 +105,7 @@ extern bool language_requires_canonicalization (enum language lang);
    This is an "open" class and the members are all directly
    accessible.  It is read-only after the index has been fully read
    and processed.  */
-struct cooked_index_entry : public allocate_on_obstack
+struct cooked_index_entry : public allocate_on_obstack<cooked_index_entry>
 {
   cooked_index_entry (sect_offset die_offset_, enum dwarf_tag tag_,
 		      cooked_index_flag flags_,
@@ -221,7 +222,7 @@ struct cooked_index_entry : public allocate_on_obstack
   }
 
   /* Return deferred parent entry.  */
-  CORE_ADDR get_deferred_parent () const
+  parent_map::addr_type get_deferred_parent () const
   {
     gdb_assert ((flags & IS_PARENT_DEFERRED) != 0);
     return m_parent_entry.deferred;
@@ -350,9 +351,9 @@ private:
 
   /* Finalize the index.  This should be called a single time, when
      the index has been fully populated.  It enters all the entries
-     into the internal table.  This may be invoked in a worker
-     thread.  */
-  void finalize ();
+     into the internal table and fixes up all missing parent links.
+     This may be invoked in a worker thread.  */
+  void finalize (const parent_map_map *parent_maps);
 
   /* Storage for the entries.  */
   auto_obstack m_storage;
@@ -362,7 +363,7 @@ private:
   cooked_index_entry *m_main = nullptr;
   /* The addrmap.  This maps address ranges to dwarf2_per_cu_data
      objects.  */
-  addrmap *m_addrmap = nullptr;
+  addrmap_fixed *m_addrmap = nullptr;
   /* Storage for canonical names.  */
   std::vector<gdb::unique_xmalloc_ptr<char>> m_names;
 };
@@ -418,6 +419,19 @@ public:
     return &m_addrmap;
   }
 
+  /* Return the parent_map that is currently being created.  */
+  parent_map *get_parent_map ()
+  {
+    return &m_parent_map;
+  }
+
+  /* Return the parent_map that is currently being created.  Ownership
+     is passed to the caller.  */
+  parent_map release_parent_map ()
+  {
+    return std::move (m_parent_map);
+  }
+
 private:
 
   /* Hash function for a cutu_reader.  */
@@ -432,6 +446,9 @@ private:
   htab_up m_reader_hash;
   /* The index shard that is being constructed.  */
   std::unique_ptr<cooked_index_shard> m_index;
+
+  /* Parent map for each CU that is read.  */
+  parent_map m_parent_map;
 
   /* A writeable addrmap being constructed by this scanner.  */
   addrmap_mutable m_addrmap;
@@ -467,7 +484,8 @@ class cooked_index_worker
 public:
 
   explicit cooked_index_worker (dwarf2_per_objfile *per_objfile)
-    : m_per_objfile (per_objfile)
+    : m_per_objfile (per_objfile),
+      m_cache_store (global_index_cache, per_objfile->per_bfd)
   { }
   virtual ~cooked_index_worker ()
   { }
@@ -486,9 +504,15 @@ public:
 
 protected:
 
-  /* Let cooked_index call the 'set' method.  */
+  /* Let cooked_index call the 'set' and 'write_to_cache' methods.  */
   friend class cooked_index;
+
+  /* Set the current state.  */
   void set (cooked_state desired_state);
+
+  /* Write to the index cache.  */
+  void write_to_cache (const cooked_index *idx,
+		       deferred_warnings *warn) const;
 
   /* Helper function that does the work of reading.  This must be able
      to be run in a worker thread without problems.  */
@@ -500,13 +524,17 @@ protected:
   { }
 
   /* Each thread returns a tuple holding a cooked index, any collected
-     complaints, and a vector of errors that should be printed.  The
-     latter is done because GDB's I/O system is not thread-safe.
-     run_on_main_thread could be used, but that would mean the
-     messages are printed after the prompt, which looks weird.  */
+     complaints, a vector of errors that should be printed, and a
+     vector of parent maps.
+
+     The errors are retained because GDB's I/O system is not
+     thread-safe.  run_on_main_thread could be used, but that would
+     mean the messages are printed after the prompt, which looks
+     weird.  */
   using result_type = std::tuple<std::unique_ptr<cooked_index_shard>,
 				 complaint_collection,
-				 std::vector<gdb_exception>>;
+				 std::vector<gdb_exception>,
+				 parent_map>;
 
   /* The per-objfile object.  */
   dwarf2_per_objfile *m_per_objfile;
@@ -518,6 +546,10 @@ protected:
      constructor, and this should only be done from the main thread.
      This is enforced in the cooked_index_worker constructor.  */
   deferred_warnings m_warnings;
+
+  /* A map of all parent maps.  Used during finalization to fix up
+     parent relationships.  */
+  parent_map_map m_all_parents_map;
 
 #if CXX_STD_THREAD
   /* Current state of this object.  */
@@ -534,6 +566,8 @@ protected:
      scanning is stopped and this exception will later be reported by
      the 'wait' method.  */
   std::optional<gdb_exception> m_failed;
+  /* An object used to write to the index cache.  */
+  index_cache_store_context m_cache_store;
 };
 
 /* The main index of DIEs.
@@ -607,8 +641,13 @@ public:
   void start_reading ();
 
   /* Called by cooked_index_worker to set the contents of this index
-     and transition to the MAIN_AVAILABLE state.  */
-  void set_contents (vec_type &&vec);
+     and transition to the MAIN_AVAILABLE state.  WARN is used to
+     collect any warnings that may arise when writing to the cache.
+     PARENT_MAPS is used when resolving pending parent links.
+     PARENT_MAPS may be NULL if there are no IS_PARENT_DEFERRED
+     entries in VEC.  */
+  void set_contents (vec_type &&vec, deferred_warnings *warn,
+		     const parent_map_map *parent_maps);
 
   /* A range over a vector of subranges.  */
   using range = range_chain<cooked_index_shard::range>;
@@ -632,7 +671,7 @@ public:
   /* Look up ADDR in the address map, and return either the
      corresponding CU, or nullptr if the address could not be
      found.  */
-  dwarf2_per_cu_data *lookup (unrelocated_addr addr);
+  dwarf2_per_cu_data *lookup (unrelocated_addr addr) override;
 
   /* Return a new vector of all the addrmaps used by all the indexes
      held by this object.  */
@@ -671,10 +710,6 @@ public:
 
 private:
 
-  /* Maybe write the index to the index cache.  */
-  void maybe_write_index (dwarf2_per_bfd *per_bfd,
-			  const index_cache_store_context &);
-
   /* The vector of cooked_index objects.  This is stored because the
      entries are stored on the obstacks in those objects.  */
   vec_type m_vector;
@@ -701,9 +736,6 @@ struct cooked_index_functions : public dwarf2_base_index_functions
     table->wait (cooked_state::MAIN_AVAILABLE, allow_quit);
     return table;
   }
-
-  dwarf2_per_cu_data *find_per_cu (dwarf2_per_bfd *per_bfd,
-				   unrelocated_addr adjusted_pc) override;
 
   struct compunit_symtab *find_compunit_symtab_by_address
     (struct objfile *objfile, CORE_ADDR address) override;

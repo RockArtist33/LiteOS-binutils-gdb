@@ -17,7 +17,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "target.h"
 #include "value.h"
 #include "gdbtypes.h"
@@ -98,15 +98,16 @@ static const gdb_byte arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa
 
    The location of saved registers in this buffer (in particular the PC
    to use after longjmp is called) varies depending on the ABI (in 
-   particular the FP model) and also (possibly) the C Library.
-
-   For glibc, eglibc, and uclibc the following holds:  If the FP model is 
-   SoftVFP or VFP (which implies EABI) then the PC is at offset 9 in the 
-   buffer.  This is also true for the SoftFPA model.  However, for the FPA 
-   model the PC is at offset 21 in the buffer.  */
+   particular the FP model) and also (possibly) the C Library.  */
 #define ARM_LINUX_JB_ELEMENT_SIZE	ARM_INT_REGISTER_SIZE
+/* For the FPA model the PC is at offset 21 in the buffer.  */
 #define ARM_LINUX_JB_PC_FPA		21
-#define ARM_LINUX_JB_PC_EABI		9
+/* For glibc 2.20 and later the PC is at offset 1, see glibc commit 80a56cc3ee
+   ("ARM: Add SystemTap probes to longjmp and setjmp.").
+   For newlib and uclibc, this is not correct, we need osabi settings to deal
+   with those, see PR31854 and PR31856.  Likewise for older versions of
+   glibc.  */
+#define ARM_LINUX_JB_PC_EABI		1
 
 /*
    Dynamic Linking on ARM GNU/Linux
@@ -740,7 +741,7 @@ arm_linux_core_read_description (struct gdbarch *gdbarch,
       /* NEON implies VFPv3-D32 or no-VFP unit.  Say that we only support
 	 Neon with VFPv3-D32.  */
       if (arm_hwcap & HWCAP_NEON)
-	return aarch32_read_description ();
+	return aarch32_read_description (false);
       else if ((arm_hwcap & (HWCAP_VFPv3 | HWCAP_VFPv3D16)) == HWCAP_VFPv3)
 	return arm_read_description (ARM_FP_TYPE_VFPV3, false);
 

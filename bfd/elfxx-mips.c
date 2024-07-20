@@ -7298,11 +7298,23 @@ _bfd_mips_elf_eh_frame_address_size (bfd *abfd, const asection *sec)
       if (long64_p)
 	return 8;
 
-      if (sec->reloc_count > 0
-	  && elf_section_data (sec)->relocs != NULL
-	  && (ELF32_R_TYPE (elf_section_data (sec)->relocs[0].r_info)
-	      == R_MIPS_64))
-	return 8;
+      if (sec->reloc_count > 0)
+	{
+	  /* Load the relocations for this section.  */
+	  Elf_Internal_Rela *internal_relocs =
+	    _bfd_elf_link_read_relocs (abfd, sec, NULL, NULL, true);
+	  if (internal_relocs == NULL)
+	    return 0;
+
+	  unsigned int size = 0;
+	  if (ELF32_R_TYPE (internal_relocs[0].r_info) == R_MIPS_64)
+	    size = 8;
+
+	  if (elf_section_data (sec)->relocs != internal_relocs)
+	    free (internal_relocs);
+
+	  return size;
+	}
 
       return 0;
     }
@@ -9644,48 +9656,6 @@ _bfd_mips_elf_adjust_dynamic_symbol (struct bfd_link_info *info,
   return _bfd_elf_adjust_dynamic_copy (info, h, s);
 }
 
-/* This function is called after all the input files have been read,
-   and the input sections have been assigned to output sections.  We
-   check for any mips16 stub sections that we can discard.  */
-
-bool
-_bfd_mips_elf_always_size_sections (bfd *output_bfd,
-				    struct bfd_link_info *info)
-{
-  asection *sect;
-  struct mips_elf_link_hash_table *htab;
-  struct mips_htab_traverse_info hti;
-
-  htab = mips_elf_hash_table (info);
-  BFD_ASSERT (htab != NULL);
-
-  /* The .reginfo section has a fixed size.  */
-  sect = bfd_get_section_by_name (output_bfd, ".reginfo");
-  if (sect != NULL)
-    {
-      bfd_set_section_size (sect, sizeof (Elf32_External_RegInfo));
-      sect->flags |= SEC_FIXED_SIZE | SEC_HAS_CONTENTS;
-    }
-
-  /* The .MIPS.abiflags section has a fixed size.  */
-  sect = bfd_get_section_by_name (output_bfd, ".MIPS.abiflags");
-  if (sect != NULL)
-    {
-      bfd_set_section_size (sect, sizeof (Elf_External_ABIFlags_v0));
-      sect->flags |= SEC_FIXED_SIZE | SEC_HAS_CONTENTS;
-    }
-
-  hti.info = info;
-  hti.output_bfd = output_bfd;
-  hti.error = false;
-  mips_elf_link_hash_traverse (mips_elf_hash_table (info),
-			       mips_elf_check_symbols, &hti);
-  if (hti.error)
-    return false;
-
-  return true;
-}
-
 /* If the link uses a GOT, lay it out and work out its size.  */
 
 static bool
@@ -9990,23 +9960,50 @@ mips_elf_set_plt_sym_value (struct mips_elf_link_hash_entry *h, void *data)
   return true;
 }
 
-/* Set the sizes of the dynamic sections.  */
+/* Set the sizes of the dynamic sections, some mips non-dynamic sections,
+   and check for any mips16 stub sections that we can discard.  */
 
 bool
-_bfd_mips_elf_size_dynamic_sections (bfd *output_bfd,
-				     struct bfd_link_info *info)
+_bfd_mips_elf_late_size_sections (bfd *output_bfd,
+				  struct bfd_link_info *info)
 {
   bfd *dynobj;
   asection *s, *sreldyn;
   bool reltext;
   struct mips_elf_link_hash_table *htab;
+  struct mips_htab_traverse_info hti;
 
   htab = mips_elf_hash_table (info);
   BFD_ASSERT (htab != NULL);
-  dynobj = elf_hash_table (info)->dynobj;
-  BFD_ASSERT (dynobj != NULL);
 
-  if (elf_hash_table (info)->dynamic_sections_created)
+  /* The .reginfo section has a fixed size.  */
+  s = bfd_get_section_by_name (output_bfd, ".reginfo");
+  if (s != NULL)
+    {
+      bfd_set_section_size (s, sizeof (Elf32_External_RegInfo));
+      s->flags |= SEC_FIXED_SIZE | SEC_HAS_CONTENTS;
+    }
+
+  /* The .MIPS.abiflags section has a fixed size.  */
+  s = bfd_get_section_by_name (output_bfd, ".MIPS.abiflags");
+  if (s != NULL)
+    {
+      bfd_set_section_size (s, sizeof (Elf_External_ABIFlags_v0));
+      s->flags |= SEC_FIXED_SIZE | SEC_HAS_CONTENTS;
+    }
+
+  hti.info = info;
+  hti.output_bfd = output_bfd;
+  hti.error = false;
+  mips_elf_link_hash_traverse (htab, mips_elf_check_symbols, &hti);
+  if (hti.error)
+    return false;
+
+  dynobj = htab->root.dynobj;
+  if (dynobj == NULL)
+    return true;
+
+  if (htab->root.dynamic_sections_created)
     {
       /* Set the contents of the .interp section to the interpreter.  */
       if (bfd_link_executable (info) && !info->nointerp)
@@ -10146,7 +10143,7 @@ _bfd_mips_elf_size_dynamic_sections (bfd *output_bfd,
 	    }
 	}
       else if (bfd_link_executable (info)
-	       && ! mips_elf_hash_table (info)->use_rld_obj_head
+	       && !htab->use_rld_obj_head
 	       && startswith (name, ".rld_map"))
 	{
 	  /* We add a room for __rld_map.  It will be filled in by the
@@ -10155,7 +10152,7 @@ _bfd_mips_elf_size_dynamic_sections (bfd *output_bfd,
 	}
       else if (SGI_COMPAT (output_bfd)
 	       && startswith (name, ".compact_rel"))
-	s->size += mips_elf_hash_table (info)->compact_rel_size;
+	s->size += htab->compact_rel_size;
       else if (s == htab->root.splt)
 	{
 	  /* If the last PLT entry has a branch delay slot, allocate
@@ -10195,7 +10192,7 @@ _bfd_mips_elf_size_dynamic_sections (bfd *output_bfd,
 	}
     }
 
-  if (elf_hash_table (info)->dynamic_sections_created)
+  if (htab->root.dynamic_sections_created)
     {
       /* Add some entries to the .dynamic section.  We fill in the
 	 values later, in _bfd_mips_elf_finish_dynamic_sections, but we
@@ -14943,7 +14940,7 @@ _bfd_mips_elf_final_link (bfd *abfd, struct bfd_link_info *info)
 	      input_section->flags &= ~SEC_HAS_CONTENTS;
 	    }
 
-	  /* Size has been set in _bfd_mips_elf_always_size_sections.  */
+	  /* Size has been set in _bfd_mips_elf_late_size_sections.  */
 	  BFD_ASSERT(o->size == sizeof (Elf_External_ABIFlags_v0));
 
 	  /* Skip this section later on (I don't think this currently
@@ -15002,7 +14999,7 @@ _bfd_mips_elf_final_link (bfd *abfd, struct bfd_link_info *info)
 	      input_section->flags &= ~SEC_HAS_CONTENTS;
 	    }
 
-	  /* Size has been set in _bfd_mips_elf_always_size_sections.  */
+	  /* Size has been set in _bfd_mips_elf_late_size_sections.  */
 	  BFD_ASSERT(o->size == sizeof (Elf32_External_RegInfo));
 
 	  /* Skip this section later on (I don't think this currently

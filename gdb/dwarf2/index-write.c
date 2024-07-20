@@ -17,12 +17,12 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 
 #include "dwarf2/index-write.h"
 
 #include "addrmap.h"
 #include "cli/cli-decode.h"
+#include "exceptions.h"
 #include "gdbsupport/byte-vector.h"
 #include "gdbsupport/filestuff.h"
 #include "gdbsupport/gdb_unlinker.h"
@@ -35,7 +35,7 @@
 #include "dwarf2/read.h"
 #include "dwarf2/dwz.h"
 #include "gdb/gdb-index.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "objfiles.h"
 #include "ada-lang.h"
 #include "dwarf2/tag.h"
@@ -761,7 +761,7 @@ public:
 		   : DW_IDX_type_unit);
 		m_abbrev_table.append_unsigned_leb128 (DW_FORM_udata);
 		m_abbrev_table.append_unsigned_leb128 (DW_IDX_die_offset);
-		m_abbrev_table.append_unsigned_leb128 (DW_FORM_udata);
+		m_abbrev_table.append_unsigned_leb128 (DW_FORM_ref_addr);
 		m_abbrev_table.append_unsigned_leb128 (DW_IDX_GNU_language);
 		m_abbrev_table.append_unsigned_leb128 (DW_FORM_udata);
 		if ((entry->flags & IS_STATIC) != 0)
@@ -796,7 +796,10 @@ public:
 	    gdb_assert (it != m_cu_index_htab.cend ());
 	    m_entry_pool.append_unsigned_leb128 (it->second);
 
-	    m_entry_pool.append_unsigned_leb128 (to_underlying (entry->die_offset));
+	    m_entry_pool.append_uint (dwarf5_offset_size (),
+				      m_dwarf5_byte_order,
+				      to_underlying (entry->die_offset));
+
 	    m_entry_pool.append_unsigned_leb128 (entry->per_cu->dw_lang ());
 
 	    if (parent != nullptr)

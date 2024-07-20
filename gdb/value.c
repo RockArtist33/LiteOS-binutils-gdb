@@ -17,14 +17,14 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
+#include "extract-store-integer.h"
 #include "symtab.h"
 #include "gdbtypes.h"
 #include "value.h"
 #include "gdbcore.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "target.h"
 #include "language.h"
 #include "demangle.h"
@@ -4014,9 +4014,6 @@ value::fetch_lazy_register ()
 	}
       else
 	{
-	  int i;
-	  gdb::array_view<const gdb_byte> buf = new_val->contents ();
-
 	  if (new_val->lval () == lval_register)
 	    gdb_printf (&debug_file, " register=%d", new_val->regnum ());
 	  else if (new_val->lval () == lval_memory)
@@ -4026,11 +4023,21 @@ value::fetch_lazy_register ()
 	  else
 	    gdb_printf (&debug_file, " computed");
 
-	  gdb_printf (&debug_file, " bytes=");
-	  gdb_printf (&debug_file, "[");
-	  for (i = 0; i < register_size (gdbarch, regnum); i++)
-	    gdb_printf (&debug_file, "%02x", buf[i]);
-	  gdb_printf (&debug_file, "]");
+	  if (new_val->entirely_available ())
+	    {
+	      int i;
+	      gdb::array_view<const gdb_byte> buf = new_val->contents ();
+
+	      gdb_printf (&debug_file, " bytes=");
+	      gdb_printf (&debug_file, "[");
+	      for (i = 0; i < register_size (gdbarch, regnum); i++)
+		gdb_printf (&debug_file, "%02x", buf[i]);
+	      gdb_printf (&debug_file, "]");
+	    }
+	  else if (new_val->entirely_unavailable ())
+	    gdb_printf (&debug_file, " unavailable");
+	  else
+	    gdb_printf (&debug_file, " partly unavailable");
 	}
 
       frame_debug_printf ("%s", debug_file.c_str ());

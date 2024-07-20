@@ -17,10 +17,10 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-
 #if !defined (COMPLAINTS_H)
 #define COMPLAINTS_H
 
+#include "gdbsupport/scoped_restore.h"
 #include <unordered_set>
 
 /* Helper for complaint.  */
@@ -70,7 +70,7 @@ typedef std::unordered_set<std::string> complaint_collection;
    the main thread).  Messages can be re-emitted on the main thread
    using re_emit_complaints, see below.  */
 
-class complaint_interceptor
+class complaint_interceptor final : public warning_hook_handler_type
 {
 public:
 
@@ -94,8 +94,8 @@ private:
 
   /* A helper function that is used by the 'complaint' implementation
      to issue a complaint.  */
-  static void issue_complaint (const char *, va_list)
-    ATTRIBUTE_PRINTF (1, 0);
+  void warn (const char *, va_list) override
+    ATTRIBUTE_PRINTF (2, 0);
 
   /* This object.  Used by the static callback function.  */
   static thread_local complaint_interceptor *g_complaint_interceptor;

@@ -17,12 +17,11 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
 #include "command.h"
 #include "ui-out.h"
 #include "cli/cli-script.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "progspace.h"
 #include "objfiles.h"
 #include "value.h"
@@ -122,7 +121,7 @@ static enum ext_lang_rc gdbpy_apply_type_printers
 static void gdbpy_free_type_printers (const struct extension_language_defn *,
 				      struct ext_lang_type_printers *);
 static void gdbpy_set_quit_flag (const struct extension_language_defn *);
-static int gdbpy_check_quit_flag (const struct extension_language_defn *);
+static bool gdbpy_check_quit_flag (const struct extension_language_defn *);
 static enum ext_lang_rc gdbpy_before_prompt_hook
   (const struct extension_language_defn *, const char *current_gdb_prompt);
 static std::optional<std::string> gdbpy_colorize
@@ -276,11 +275,11 @@ gdbpy_set_quit_flag (const struct extension_language_defn *extlang)
 
 /* Return true if the quit flag has been set, false otherwise.  */
 
-static int
+static bool
 gdbpy_check_quit_flag (const struct extension_language_defn *extlang)
 {
   if (!gdb_python_initialized)
-    return 0;
+    return false;
 
   gdbpy_gil gil;
   return PyOS_InterruptOccurred ();
@@ -288,12 +287,13 @@ gdbpy_check_quit_flag (const struct extension_language_defn *extlang)
 
 /* Evaluate a Python command like PyRun_SimpleString, but takes a
    Python start symbol, and does not automatically print the stack on
-   errors.  FILENAME is used to set the file name in error
-   messages.  */
+   errors.  FILENAME is used to set the file name in error messages;
+   NULL means that this is evaluating a string, not the contents of a
+   file.  */
 
 static int
 eval_python_command (const char *command, int start_symbol,
-		     const char *filename = "<string>")
+		     const char *filename = nullptr)
 {
   PyObject *m, *d;
 
@@ -305,17 +305,69 @@ eval_python_command (const char *command, int start_symbol,
   if (d == NULL)
     return -1;
 
+  bool file_set = false;
+  if (filename != nullptr)
+    {
+      gdbpy_ref<> file = host_string_to_python_string ("__file__");
+      if (file == nullptr)
+	return -1;
+
+      /* PyDict_GetItemWithError returns a borrowed reference.  */
+      PyObject *found = PyDict_GetItemWithError (d, file.get ());
+      if (found == nullptr)
+	{
+	  if (PyErr_Occurred ())
+	    return -1;
+
+	  gdbpy_ref<> filename_obj = host_string_to_python_string (filename);
+	  if (filename_obj == nullptr)
+	    return -1;
+
+	  if (PyDict_SetItem (d, file.get (), filename_obj.get ()) < 0)
+	    return -1;
+	  if (PyDict_SetItemString (d, "__cached__", Py_None) < 0)
+	    return -1;
+
+	  file_set = true;
+	}
+    }
+
   /* Use this API because it is in Python 3.2.  */
-  gdbpy_ref<> code (Py_CompileStringExFlags (command, filename, start_symbol,
+  gdbpy_ref<> code (Py_CompileStringExFlags (command,
+					     filename == nullptr
+					     ? "<string>"
+					     : filename,
+					     start_symbol,
 					     nullptr, -1));
-  if (code == nullptr)
-    return -1;
 
-  gdbpy_ref<> result (PyEval_EvalCode (code.get (), d, d));
-  if (result == nullptr)
-    return -1;
+  int result = -1;
+  if (code != nullptr)
+    {
+      gdbpy_ref<> eval_result (PyEval_EvalCode (code.get (), d, d));
+      if (eval_result != nullptr)
+	result = 0;
+    }
 
-  return 0;
+  if (file_set)
+    {
+      /* If there's already an exception occurring, preserve it and
+	 restore it before returning from this function.  */
+      std::optional<gdbpy_err_fetch> save_error;
+      if (result < 0)
+	save_error.emplace ();
+
+      /* CPython also just ignores errors here.  These should be
+	 expected to be exceedingly rare anyway.  */
+      if (PyDict_DelItemString (d, "__file__") < 0)
+	PyErr_Clear ();
+      if (PyDict_DelItemString (d, "__cached__") < 0)
+	PyErr_Clear ();
+
+      if (save_error.has_value ())
+	save_error->restore ();
+    }
+
+  return result;
 }
 
 /* Implementation of the gdb "python-interactive" command.  */
@@ -752,10 +804,6 @@ gdbpy_rbreak (PyObject *self, PyObject *args, PyObject *kw)
     }
 
   global_symbol_searcher spec (SEARCH_FUNCTION_DOMAIN, regex);
-  SCOPE_EXIT {
-    for (const char *elem : spec.filenames)
-      xfree ((void *) elem);
-  };
 
   /* The "symtabs" keyword is any Python iterable object that returns
      a gdb.Symtab on each iteration.  If specified, iterate through
@@ -800,10 +848,7 @@ gdbpy_rbreak (PyObject *self, PyObject *args, PyObject *kw)
 	  if (filename == NULL)
 	    return NULL;
 
-	  /* Make sure there is a definite place to store the value of
-	     filename before it is released.  */
-	  spec.filenames.push_back (nullptr);
-	  spec.filenames.back () = filename.release ();
+	  spec.add_filename (std::move (filename));
 	}
     }
 
@@ -918,7 +963,7 @@ gdbpy_decode_line (PyObject *self, PyObject *args)
       else
 	{
 	  set_default_source_symtab_and_line ();
-	  def_sal = get_current_source_symtab_and_line ();
+	  def_sal = get_current_source_symtab_and_line (current_program_space);
 	  sals = def_sal;
 	}
     }

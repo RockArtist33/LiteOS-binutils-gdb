@@ -1020,7 +1020,7 @@ is not used.
 )
 
 Function(
-    type="int",
+    type="bool",
     name="inner_than",
     params=[("CORE_ADDR", "lhs"), ("CORE_ADDR", "rhs")],
 )
@@ -1267,7 +1267,7 @@ must be either a pointer or a reference type.
 """,
     type="bool",
     name="tagged_address_p",
-    params=[("struct value *", "address")],
+    params=[("CORE_ADDR", "address")],
     predefault="default_tagged_address_p",
     invalid=False,
 )
@@ -2711,7 +2711,7 @@ Functions for allowing a target to modify its disassembler options.
 )
 
 Value(
-    type="char **",
+    type="std::string *",
     name="disassembler_options",
     invalid=False,
     printer="pstring_ptr (gdbarch->disassembler_options)",

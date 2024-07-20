@@ -19,17 +19,17 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /* GDB header files.  */
-#include "defs.h"
 #include "arch-utils.h"
 #include "elf-bfd.h"
 #include "disasm.h"
 #include "dwarf2/frame.h"
+#include "extract-store-integer.h"
 #include "frame-base.h"
 #include "frame-unwind.h"
 #include "gdbcore.h"
 #include "inferior.h"
 #include "reggroups.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "objfiles.h"
 #include "osabi.h"
 #include "prologue-value.h"
@@ -299,7 +299,7 @@ static const struct arc_register_feature arc_common_aux_reg_feature =
   }
 };
 
-static char *arc_disassembler_options = NULL;
+static std::string arc_disassembler_options;
 
 /* Functions are sorted in the order as they are used in the
    _initialize_arc_tdep (), which uses the same order as gdbarch.h.  Static
@@ -861,7 +861,7 @@ arc_push_dummy_code (struct gdbarch *gdbarch, CORE_ADDR sp, CORE_ADDR funaddr,
 		     struct regcache *regcache)
 {
   *real_pc = funaddr;
-  *bp_addr = entry_point_address ();
+  *bp_addr = entry_point_address (current_program_space);
   return sp;
 }
 
@@ -2365,7 +2365,6 @@ arc_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 	= tdesc_architecture (info.target_desc);
       if (tdesc_arch != NULL)
 	{
-	  xfree (arc_disassembler_options);
 	  /* FIXME: It is not really good to change disassembler options
 	     behind the scene, because that might override options
 	     specified by the user.  However as of now ARC doesn't support
@@ -2386,24 +2385,24 @@ arc_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 	  switch (tdesc_arch->mach)
 	    {
 	    case bfd_mach_arc_arc601:
-	      arc_disassembler_options = xstrdup ("cpu=arc601");
+	      arc_disassembler_options = "cpu=arc601";
 	      break;
 	    case bfd_mach_arc_arc600:
-	      arc_disassembler_options = xstrdup ("cpu=arc600");
+	      arc_disassembler_options = "cpu=arc600";
 	      break;
 	    case bfd_mach_arc_arc700:
-	      arc_disassembler_options = xstrdup ("cpu=arc700");
+	      arc_disassembler_options = "cpu=arc700";
 	      break;
 	    case bfd_mach_arc_arcv2:
 	      /* Machine arcv2 has three arches: ARCv2, EM and HS; where ARCv2
 		 is treated as EM.  */
 	      if (arc_arch_is_hs (tdesc_arch))
-		arc_disassembler_options = xstrdup ("cpu=hs38_linux");
+		arc_disassembler_options = "cpu=hs38_linux";
 	      else
-		arc_disassembler_options = xstrdup ("cpu=em4_fpuda");
+		arc_disassembler_options = "cpu=em4_fpuda";
 	      break;
 	    default:
-	      arc_disassembler_options = NULL;
+	      arc_disassembler_options = "";
 	      break;
 	    }
 	}

@@ -18,7 +18,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "cp-support.h"
 #include "gdbsupport/gdb_obstack.h"
 #include "symtab.h"
@@ -101,8 +100,9 @@ cp_scan_for_anonymous_namespaces (struct buildsym_compunit *compunit,
 		 to 0, this way it is always considered valid.  */
 	      std::vector<const char *> excludes;
 	      add_using_directive (compunit->get_local_using_directives (),
-				   dest, src, NULL, NULL, excludes, 0,
-				   1, &objfile->objfile_obstack);
+				   objfile->intern (dest), objfile->intern (src),
+				   nullptr, nullptr, excludes, 0,
+				   &objfile->objfile_obstack);
 	    }
 	  /* The "+ 2" is for the "::".  */
 	  previous_component = next_component + 2;
@@ -287,10 +287,10 @@ cp_search_static_and_baseclasses (const char *name,
   struct type *scope_type = scope_sym.symbol->type ();
 
   /* If the scope is a function/method, then look up NESTED as a local
-     static variable.  E.g., "print 'function()::static_var'".  */
+     static variable or type.  E.g., "print 'function()::static_var'".  */
   if ((scope_type->code () == TYPE_CODE_FUNC
        || scope_type->code () == TYPE_CODE_METHOD)
-      && (domain & SEARCH_VAR_DOMAIN) != 0)
+      && (domain & (SEARCH_VAR_DOMAIN | SEARCH_TYPE_DOMAIN)) != 0)
     return lookup_symbol (nested, scope_sym.symbol->value_block (),
 			  domain, NULL);
 
@@ -539,61 +539,23 @@ cp_lookup_symbol_via_imports (const char *scope,
     return {};
 }
 
-/* Helper function that searches an array of symbols for one named NAME.  */
-
-static struct symbol *
-search_symbol_list (const char *name, int num,
-		    struct symbol **syms)
-{
-  int i;
-
-  /* Maybe we should store a dictionary in here instead.  */
-  for (i = 0; i < num; ++i)
-    {
-      if (strcmp (name, syms[i]->natural_name ()) == 0)
-	return syms[i];
-    }
-  return NULL;
-}
-
-/* Search for symbols whose name match NAME in the given SCOPE.
-   if BLOCK is a function, we'll search first through the template
-   parameters and function type. Afterwards (or if BLOCK is not a function)
-   search through imported directives using cp_lookup_symbol_via_imports.  */
+/* Search for symbols whose name match NAME in the given SCOPE.  */
 
 struct block_symbol
-cp_lookup_symbol_imports_or_template (const char *scope,
-				      const char *name,
-				      const struct block *block,
-				      const domain_search_flags domain)
+cp_lookup_symbol_imports (const char *scope,
+			  const char *name,
+			  const struct block *block,
+			  const domain_search_flags domain)
 {
   struct symbol *function = block->function ();
 
   symbol_lookup_debug_printf
-    ("cp_lookup_symbol_imports_or_template (%s, %s, %s, %s)",
+    ("cp_lookup_symbol_imports (%s, %s, %s, %s)",
      scope, name, host_address_to_string (block),
      domain_name (domain).c_str ());
 
   if (function != NULL && function->language () == language_cplus)
     {
-      /* Search the function's template parameters.  */
-      if (function->is_cplus_template_function ())
-	{
-	  struct template_symbol *templ
-	    = (struct template_symbol *) function;
-	  struct symbol *sym = search_symbol_list (name,
-						   templ->n_template_arguments,
-						   templ->template_arguments);
-
-	  if (sym != NULL)
-	    {
-	      symbol_lookup_debug_printf
-		("cp_lookup_symbol_imports_or_template (...) = %s",
-		 host_address_to_string (sym));
-	      return (struct block_symbol) {sym, block};
-	    }
-	}
-
       /* Search the template parameters of the function's defining
 	 context.  */
       if (function->natural_name ())
@@ -629,7 +591,7 @@ cp_lookup_symbol_imports_or_template (const char *scope,
 	      if (sym != NULL)
 		{
 		  symbol_lookup_debug_printf
-		    ("cp_lookup_symbol_imports_or_template (...) = %s",
+		    ("cp_lookup_symbol_imports (...) = %s",
 		     host_address_to_string (sym));
 		  return (struct block_symbol) {sym, parent};
 		}
@@ -639,7 +601,7 @@ cp_lookup_symbol_imports_or_template (const char *scope,
 
   struct block_symbol result
     = cp_lookup_symbol_via_imports (scope, name, block, domain, 1, 1);
-  symbol_lookup_debug_printf ("cp_lookup_symbol_imports_or_template (...) = %s\n",
+  symbol_lookup_debug_printf ("cp_lookup_symbol_imports (...) = %s\n",
 		  result.symbol != nullptr
 		  ? host_address_to_string (result.symbol) : "NULL");
   return result;
@@ -1024,10 +986,10 @@ cp_lookup_nested_symbol (struct type *parent_type,
    released version of GCC with such information.)  */
 
 struct type *
-cp_lookup_transparent_type (const char *name)
+cp_lookup_transparent_type (const char *name, domain_search_flags flags)
 {
   /* First, try the honest way of looking up the definition.  */
-  struct type *t = basic_lookup_transparent_type (name);
+  struct type *t = basic_lookup_transparent_type (name, flags);
   const char *scope;
 
   if (t != NULL)

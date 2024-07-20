@@ -18,7 +18,6 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
-#include "defs.h"
 #include "compile-internal.h"
 #include "compile-cplus.h"
 #include "gdbsupport/gdb_assert.h"
@@ -32,7 +31,7 @@
 #include "gdbtypes.h"
 #include "dwarf2/loc.h"
 #include "cp-support.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "compile-c.h"
 #include "inferior.h"
 

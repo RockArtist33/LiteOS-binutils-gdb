@@ -17,12 +17,12 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "frame.h"
 #include "inferior.h"
 #include "symtab.h"
 #include "value.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "language.h"
 #include "gdbcore.h"
 #include "symfile.h"
@@ -49,7 +49,6 @@
 #include "dwarf2/frame.h"
 #include "user-regs.h"
 #include "valprint.h"
-#include "gdbsupport/common-defs.h"
 #include "opcode/riscv-opc.h"
 #include "cli/cli-decode.h"
 #include "observable.h"
@@ -133,7 +132,7 @@ static const char *riscv_feature_name_virtual = "org.gnu.gdb.riscv.virtual";
 static const char *riscv_feature_name_vector = "org.gnu.gdb.riscv.vector";
 
 /* The current set of options to be passed to the disassembler.  */
-static char *riscv_disassembler_options;
+static std::string riscv_disassembler_options;
 
 /* Cached information about a frame.  */
 
@@ -4823,7 +4822,7 @@ initialisation process."),
   add_setshow_auto_boolean_cmd ("use-compressed-breakpoints", no_class,
 				&use_compressed_breakpoints,
 				_("\
-Set debugger's use of compressed breakpoints."), _("	\
+Set debugger's use of compressed breakpoints."), _("\
 Show debugger's use of compressed breakpoints."), _("\
 Debugging compressed code requires compressed breakpoints to be used. If\n\
 left to 'auto' then gdb will use them if the existing instruction is a\n\

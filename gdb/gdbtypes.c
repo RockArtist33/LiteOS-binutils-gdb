@@ -19,7 +19,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "bfd.h"
 #include "symtab.h"
 #include "symfile.h"
@@ -31,7 +30,7 @@
 #include "value.h"
 #include "demangle.h"
 #include "complaints.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "cp-abi.h"
 #include "hashtab.h"
 #include "cp-support.h"
@@ -2809,10 +2808,15 @@ resolve_dynamic_type_internal (struct type *type,
 	      pinfo.addr = read_memory_typed_address (addr_stack->addr, type);
 	    pinfo.next = addr_stack;
 
-	    resolved_type = copy_type (type);
-	    resolved_type->set_target_type
-	      (resolve_dynamic_type_internal (type->target_type (),
-					      &pinfo, frame, top_level));
+	    /* Special case a NULL pointer here -- we don't want to
+	       dereference it.  */
+	    if (pinfo.addr != 0)
+	      {
+		resolved_type = copy_type (type);
+		resolved_type->set_target_type
+		  (resolve_dynamic_type_internal (type->target_type (),
+						  &pinfo, frame, true));
+	      }
 	    break;
 	  }
 
@@ -4202,6 +4206,19 @@ types_equal (struct type *a, struct type *b)
       return true;
     }
 
+  /* Two array types are the same if they have the same element types
+     and array bounds.  */
+  if (a->code () == TYPE_CODE_ARRAY)
+    {
+      if (!types_equal (a->target_type (), b->target_type ()))
+	return false;
+
+      if (*a->bounds () != *b->bounds ())
+	return false;
+
+      return true;
+    }
+
   return false;
 }
 
@@ -4355,7 +4372,7 @@ check_types_worklist (std::vector<type_equality_entry> *worklist,
 
       /* If the type pair has already been visited, we know it is
 	 ok.  */
-      cache->insert (&entry, sizeof (entry), &added);
+      cache->insert (entry, &added);
       if (!added)
 	continue;
 

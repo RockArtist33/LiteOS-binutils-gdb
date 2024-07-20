@@ -20,8 +20,8 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "bfd.h"
+#include "extract-store-integer.h"
 #include "inferior.h"
 #include "regcache.h"
 #include "completer.h"
@@ -35,7 +35,7 @@
 #include "frame-base.h"
 
 #include "gdbcore.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "gdbtypes.h"
 #include "objfiles.h"
 #include "hppa-tdep.h"

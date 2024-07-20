@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "serial.h"
 #include "ser-base.h"
 #include "ser-unix.h"
@@ -29,7 +28,7 @@
 #include "gdbsupport/gdb_sys_time.h"
 
 #include "gdbsupport/gdb_select.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "gdbsupport/filestuff.h"
 #include <termios.h>
 #include "gdbsupport/scoped_ignore_sigttou.h"

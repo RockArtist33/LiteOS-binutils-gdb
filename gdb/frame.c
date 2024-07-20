@@ -17,8 +17,9 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "frame.h"
+#include "event-top.h"
+#include "extract-store-integer.h"
 #include "target.h"
 #include "value.h"
 #include "inferior.h"
@@ -33,7 +34,7 @@
 #include "frame-unwind.h"
 #include "frame-base.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "observable.h"
 #include "objfiles.h"
 #include "gdbthread.h"
@@ -1315,9 +1316,7 @@ frame_unwind_register_value (const frame_info_ptr &next_frame, int regnum)
 
 	  if (value->lazy ())
 	    gdb_printf (&debug_file, " lazy");
-	  else if (!value->entirely_available ())
-	    gdb_printf (&debug_file, " unavailable");
-	  else
+	  else if (value->entirely_available ())
 	    {
 	      int i;
 	      gdb::array_view<const gdb_byte> buf = value->contents ();
@@ -1328,6 +1327,10 @@ frame_unwind_register_value (const frame_info_ptr &next_frame, int regnum)
 		gdb_printf (&debug_file, "%02x", buf[i]);
 	      gdb_printf (&debug_file, "]");
 	    }
+	  else if (value->entirely_unavailable ())
+	    gdb_printf (&debug_file, " unavailable");
+	  else
+	    gdb_printf (&debug_file, " partly unavailable");
 	}
 
       frame_debug_printf ("%s", debug_file.c_str ());
@@ -2423,6 +2426,38 @@ get_prev_frame_always_1 (const frame_info_ptr &this_frame)
 	}
     }
 
+  /* Ensure we can unwind the program counter of THIS_FRAME.  */
+  try
+    {
+      /* Calling frame_unwind_pc for the sentinel frame relies on the
+	 current_frame being set, which at this point it might not be if we
+	 are in the process of setting the current_frame after a stop (see
+	 get_current_frame).
+
+	 The point of this check is to ensure that the unwinder for
+	 THIS_FRAME can actually unwind the $pc, which we assume the
+	 sentinel frame unwinder can always do (it's just a read from the
+	 machine state), so we only call frame_unwind_pc for frames other
+	 than the sentinel (level -1) frame.
+
+	 Additionally, we don't actually care about the value of the
+	 unwound $pc, just that the call completed successfully.  */
+      if (this_frame->level >= 0)
+	frame_unwind_pc (this_frame);
+    }
+  catch (const gdb_exception_error &ex)
+    {
+      if (ex.error == NOT_AVAILABLE_ERROR || ex.error == OPTIMIZED_OUT_ERROR)
+	{
+	  frame_debug_printf ("  -> nullptr // no saved PC");
+	  this_frame->stop_reason = UNWIND_NO_SAVED_PC;
+	  this_frame->prev = nullptr;
+	  return nullptr;
+	}
+
+      throw;
+    }
+
   return get_prev_frame_maybe_check_cycle (this_frame);
 }
 
@@ -2593,7 +2628,7 @@ inside_entry_func (const frame_info_ptr &this_frame)
 {
   CORE_ADDR entry_point;
 
-  if (!entry_point_address_query (&entry_point))
+  if (!entry_point_address_query (current_program_space, &entry_point))
     return false;
 
   return get_frame_func (this_frame) == entry_point;

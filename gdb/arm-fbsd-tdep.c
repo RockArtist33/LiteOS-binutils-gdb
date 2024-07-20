@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 
 #include "elf/common.h"
 #include "target-descriptions.h"
@@ -228,7 +227,7 @@ arm_fbsd_read_description_auxv (const std::optional<gdb::byte_vector> &auxv,
   if (arm_hwcap & HWCAP_VFP)
     {
       if (arm_hwcap & HWCAP_NEON)
-	return aarch32_read_description ();
+	return aarch32_read_description (tls);
       else if ((arm_hwcap & (HWCAP_VFPv3 | HWCAP_VFPD32))
 	       == (HWCAP_VFPv3 | HWCAP_VFPD32))
 	return arm_read_description (ARM_FP_TYPE_VFPV3, tls);

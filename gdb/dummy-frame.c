@@ -18,14 +18,13 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
-#include "defs.h"
 #include "dummy-frame.h"
 #include "regcache.h"
 #include "frame.h"
 #include "inferior.h"
 #include "frame-unwind.h"
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "observable.h"
 #include "gdbthread.h"
 #include "infcall.h"

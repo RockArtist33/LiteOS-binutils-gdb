@@ -17,7 +17,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "opcode/i386.h"
 #include "arch-utils.h"
 #include "command.h"
@@ -28,7 +28,7 @@
 #include "frame-unwind.h"
 #include "inferior.h"
 #include "infrun.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "gdbcore.h"
 #include "gdbtypes.h"
 #include "objfiles.h"
@@ -9132,17 +9132,19 @@ is \"default\"."),
 
   /* Add "bound" command for the show mpx commands list.  */
 
-  add_cmd ("bound", no_class, i386_mpx_info_bounds,
+  cmd_list_element *c = add_cmd ("bound", no_class, i386_mpx_info_bounds,
 	   "Show the memory bounds for a given array/pointer storage\
  in the bound table.",
 	   &mpx_show_cmdlist);
+  deprecate_cmd (c, nullptr);
 
   /* Add "bound" command for the set mpx commands list.  */
 
-  add_cmd ("bound", no_class, i386_mpx_set_bounds,
+  c = add_cmd ("bound", no_class, i386_mpx_set_bounds,
 	   "Set the memory bounds for a given array/pointer storage\
  in the bound table.",
 	   &mpx_set_cmdlist);
+  deprecate_cmd (c, nullptr);
 
   gdbarch_register_osabi (bfd_arch_i386, 0, GDB_OSABI_SVR4,
 			  i386_svr4_init_abi);

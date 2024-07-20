@@ -44,8 +44,6 @@ using addrmap_foreach_const_fn
 /* The base class for addrmaps.  */
 struct addrmap
 {
-  virtual ~addrmap () = default;
-
   /* Return the object associated with ADDR in MAP.  */
   const void *find (CORE_ADDR addr) const
   { return this->do_find (addr); }
@@ -68,6 +66,9 @@ struct addrmap
   { return this->do_foreach (fn); }
 
 
+protected:
+  ~addrmap () = default;
+
 private:
   /* Worker for find, implemented by sub-classes.  */
   virtual void *do_find (CORE_ADDR addr) const = 0;
@@ -79,13 +80,18 @@ private:
 struct addrmap_mutable;
 
 /* Fixed address maps.  */
-struct addrmap_fixed : public addrmap,
-		       public allocate_on_obstack
+struct addrmap_fixed final : public addrmap,
+			     public allocate_on_obstack<addrmap_fixed>
 {
 public:
 
-  addrmap_fixed (struct obstack *obstack, addrmap_mutable *mut);
+  addrmap_fixed (struct obstack *obstack, const addrmap_mutable *mut);
   DISABLE_COPY_AND_ASSIGN (addrmap_fixed);
+
+  /* It's fine to use the default move operators, because this addrmap
+     does not own the storage for the elements.  */
+  addrmap_fixed (addrmap_fixed &&other) = default;
+  addrmap_fixed &operator= (addrmap_fixed &&) = default;
 
   void relocate (CORE_ADDR offset) override;
 
@@ -115,13 +121,25 @@ private:
 
 /* Mutable address maps.  */
 
-struct addrmap_mutable : public addrmap
+struct addrmap_mutable final : public addrmap
 {
 public:
 
   addrmap_mutable ();
   ~addrmap_mutable ();
   DISABLE_COPY_AND_ASSIGN (addrmap_mutable);
+
+  addrmap_mutable (addrmap_mutable &&other)
+    : tree (other.tree)
+  {
+    other.tree = nullptr;
+  }
+
+  addrmap_mutable &operator= (addrmap_mutable &&other)
+  {
+    std::swap (tree, other.tree);
+    return *this;
+  }
 
   /* In the mutable address map MAP, associate the addresses from START
      to END_INCLUSIVE that are currently associated with NULL with OBJ

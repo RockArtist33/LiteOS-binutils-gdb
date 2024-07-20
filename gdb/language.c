@@ -28,12 +28,11 @@
    return data out of a "language-specific" struct pointer that is set
    whenever the working language changes.  That would be a lot faster.  */
 
-#include "defs.h"
 #include <ctype.h>
 #include "symtab.h"
 #include "gdbtypes.h"
 #include "value.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "expression.h"
 #include "language.h"
 #include "varobj.h"

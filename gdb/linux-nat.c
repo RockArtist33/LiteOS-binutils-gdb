@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "inferior.h"
 #include "infrun.h"
 #include "target.h"
@@ -33,7 +32,7 @@
 #include "nat/linux-personality.h"
 #include "linux-fork.h"
 #include "gdbthread.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "regcache.h"
 #include "regset.h"
 #include "inf-child.h"
@@ -244,7 +243,7 @@ PTRACE_PEEKTEXT/PTRACE_POKETEXT or process_vm_readv/process_vm_writev:
 
 struct linux_nat_target *linux_target;
 
-/* Does the current host support PTRACE_GETREGSET?  */
+/* See nat/linux-nat.h.  */
 enum tribool have_ptrace_getregset = TRIBOOL_UNKNOWN;
 
 /* When true, print debug messages relating to the linux native target.  */
@@ -280,7 +279,7 @@ struct simple_pid_list
 static struct simple_pid_list *stopped_pids;
 
 /* Whether target_thread_events is in effect.  */
-static int report_thread_events;
+static bool report_thread_events;
 
 static int kill_lwp (int lwpid, int signo);
 
@@ -296,6 +295,8 @@ static void delete_lwp (ptid_t ptid);
 static struct lwp_info *find_lwp_pid (ptid_t ptid);
 
 static int lwp_status_pending_p (struct lwp_info *lp);
+
+static bool is_lwp_marked_dead (lwp_info *lp);
 
 static void save_stop_reason (struct lwp_info *lp);
 
@@ -453,6 +454,12 @@ linux_init_ptrace_procfs (pid_t pid, int attached)
   linux_ptrace_init_warnings ();
   linux_proc_init_warnings ();
   proc_mem_file_is_writable ();
+
+  /* Let the arch-specific native code do any needed initialization.
+     Some architectures need to call ptrace to check for hardware
+     watchpoints support, etc.  Call it now, when we know the tracee
+     is ptrace-stopped.  */
+  linux_target->low_init_process (pid);
 }
 
 linux_nat_target::~linux_nat_target ()
@@ -1468,9 +1475,7 @@ detach_one_lwp (struct lwp_info *lp, int *signo_p)
 
   /* If the lwp has exited or was terminated due to a signal, there's
      nothing left to do.  */
-  if (lp->waitstatus.kind () == TARGET_WAITKIND_EXITED
-      || lp->waitstatus.kind () == TARGET_WAITKIND_THREAD_EXITED
-      || lp->waitstatus.kind () == TARGET_WAITKIND_SIGNALLED)
+  if (is_lwp_marked_dead (lp))
     {
       linux_nat_debug_printf
 	("Can't detach %s - it has exited or was terminated: %s.",
@@ -2200,6 +2205,21 @@ mark_lwp_dead (lwp_info *lp, int status)
   lp->stopped = 1;
 }
 
+/* Return true if LP is dead, with a pending exit/signalled event.  */
+
+static bool
+is_lwp_marked_dead (lwp_info *lp)
+{
+  switch (lp->waitstatus.kind ())
+    {
+    case TARGET_WAITKIND_EXITED:
+    case TARGET_WAITKIND_THREAD_EXITED:
+    case TARGET_WAITKIND_SIGNALLED:
+      return true;
+    }
+  return false;
+}
+
 /* Wait for LP to stop.  Returns the wait status, or 0 if the LWP has
    exited.  */
 
@@ -2634,18 +2654,6 @@ status_callback (struct lwp_info *lp)
 	  discard = 1;
 	}
 
-#if !USE_SIGTRAP_SIGINFO
-      else if (!breakpoint_inserted_here_p (lwp_inferior (lp)->aspace, pc))
-	{
-	  linux_nat_debug_printf ("previous breakpoint of %s, at %s gone",
-				  lp->ptid.to_string ().c_str (),
-				  paddress (current_inferior ()->arch (),
-					    lp->stop_pc));
-
-	  discard = 1;
-	}
-#endif
-
       if (discard)
 	{
 	  linux_nat_debug_printf ("pending event of %s cancelled.",
@@ -2725,9 +2733,7 @@ save_stop_reason (struct lwp_info *lp)
   struct gdbarch *gdbarch;
   CORE_ADDR pc;
   CORE_ADDR sw_bp_pc;
-#if USE_SIGTRAP_SIGINFO
   siginfo_t siginfo;
-#endif
 
   gdb_assert (lp->stop_reason == TARGET_STOPPED_BY_NO_REASON);
   gdb_assert (lp->status != 0);
@@ -2745,7 +2751,6 @@ save_stop_reason (struct lwp_info *lp)
   pc = regcache_read_pc (regcache);
   sw_bp_pc = pc - gdbarch_decr_pc_after_break (gdbarch);
 
-#if USE_SIGTRAP_SIGINFO
   if (linux_nat_get_siginfo (lp->ptid, &siginfo))
     {
       if (siginfo.si_signo == SIGTRAP)
@@ -2788,21 +2793,6 @@ save_stop_reason (struct lwp_info *lp)
 	    }
 	}
     }
-#else
-  if ((!lp->step || lp->stop_pc == sw_bp_pc)
-      && software_breakpoint_inserted_here_p (inf->aspace, sw_bp_pc))
-    {
-      /* The LWP was either continued, or stepped a software
-	 breakpoint instruction.  */
-      lp->stop_reason = TARGET_STOPPED_BY_SW_BREAKPOINT;
-    }
-
-  if (hardware_breakpoint_inserted_here_p (inf->aspace, pc))
-    lp->stop_reason = TARGET_STOPPED_BY_HW_BREAKPOINT;
-
-  if (lp->stop_reason == TARGET_STOPPED_BY_NO_REASON)
-    check_stopped_by_watchpoint (lp);
-#endif
 
   if (lp->stop_reason == TARGET_STOPPED_BY_SW_BREAKPOINT)
     {
@@ -2848,7 +2838,7 @@ linux_nat_target::stopped_by_sw_breakpoint ()
 bool
 linux_nat_target::supports_stopped_by_sw_breakpoint ()
 {
-  return USE_SIGTRAP_SIGINFO;
+  return true;
 }
 
 /* Returns true if the LWP had stopped for a hardware
@@ -2869,7 +2859,7 @@ linux_nat_target::stopped_by_hw_breakpoint ()
 bool
 linux_nat_target::supports_stopped_by_hw_breakpoint ()
 {
-  return USE_SIGTRAP_SIGINFO;
+  return true;
 }
 
 /* Select one LWP out of those that have events pending.  */
@@ -3462,25 +3452,6 @@ linux_nat_wait_1 (ptid_t ptid, struct target_waitstatus *ourstatus,
 
   gdb_assert (lp != NULL);
 
-  /* Now that we've selected our final event LWP, un-adjust its PC if
-     it was a software breakpoint, and we can't reliably support the
-     "stopped by software breakpoint" stop reason.  */
-  if (lp->stop_reason == TARGET_STOPPED_BY_SW_BREAKPOINT
-      && !USE_SIGTRAP_SIGINFO)
-    {
-      struct regcache *regcache = get_thread_regcache (linux_target, lp->ptid);
-      struct gdbarch *gdbarch = regcache->arch ();
-      int decr_pc = gdbarch_decr_pc_after_break (gdbarch);
-
-      if (decr_pc != 0)
-	{
-	  CORE_ADDR pc;
-
-	  pc = regcache_read_pc (regcache);
-	  regcache_write_pc (regcache, pc + decr_pc);
-	}
-    }
-
   /* We'll need this to determine whether to report a SIGSTOP as
      GDB_SIGNAL_0.  Need to take a copy because resume_clear_callback
      clears it.  */
@@ -3880,6 +3851,20 @@ linux_proc_xfer_memory_partial (int pid, gdb_byte *readbuf,
 				const gdb_byte *writebuf, ULONGEST offset,
 				LONGEST len, ULONGEST *xfered_len);
 
+/* Look for an LWP of PID that we know is ptrace-stopped.  Returns
+   NULL if none is found.  */
+
+static lwp_info *
+find_stopped_lwp (int pid)
+{
+  for (lwp_info *lp : all_lwps ())
+    if (lp->ptid.pid () == pid
+	&& lp->stopped
+	&& !is_lwp_marked_dead (lp))
+      return lp;
+  return nullptr;
+}
+
 enum target_xfer_status
 linux_nat_target::xfer_partial (enum target_object object,
 				const char *annex, gdb_byte *readbuf,
@@ -3926,6 +3911,32 @@ linux_nat_target::xfer_partial (enum target_object object,
 	return linux_proc_xfer_memory_partial (inferior_ptid.pid (), readbuf,
 					       writebuf, offset, len,
 					       xfered_len);
+
+      /* Fallback to ptrace.  This should only really trigger on old
+	 systems.  See "Accessing inferior memory" at the top.
+
+	 The target_xfer interface for memory access uses
+	 inferior_ptid as sideband argument to indicate which process
+	 to access.  Memory access is process-wide, it is not
+	 thread-specific, so inferior_ptid sometimes points at a
+	 process ptid_t.  If we fallback to inf_ptrace_target with
+	 that inferior_ptid, then the ptrace code will do the ptrace
+	 call targeting inferior_ptid.pid(), the leader LWP.  That
+	 may fail with ESRCH if the leader is currently running, or
+	 zombie.  So if we get a pid-ptid, we try to find a stopped
+	 LWP to use with ptrace.
+
+	 Note that inferior_ptid may not exist in the lwp / thread /
+	 inferior lists.  This can happen when we're removing
+	 breakpoints from a fork child that we're not going to stay
+	 attached to.  So if we don't find a stopped LWP, still do the
+	 ptrace call, targeting the inferior_ptid we had on entry.  */
+      scoped_restore save_inferior_ptid = make_scoped_restore (&inferior_ptid);
+      lwp_info *stopped = find_stopped_lwp (inferior_ptid.pid ());
+      if (stopped != nullptr)
+	inferior_ptid = stopped->ptid;
+      return inf_ptrace_target::xfer_partial (object, annex, readbuf, writebuf,
+					      offset, len, xfered_len);
     }
 
   return inf_ptrace_target::xfer_partial (object, annex, readbuf, writebuf,
@@ -4613,7 +4624,7 @@ linux_nat_target::fileio_unlink (struct inferior *inf, const char *filename,
 /* Implementation of the to_thread_events method.  */
 
 void
-linux_nat_target::thread_events (int enable)
+linux_nat_target::thread_events (bool enable)
 {
   report_thread_events = enable;
 }
@@ -4702,8 +4713,8 @@ _initialize_linux_nat ()
 {
   add_setshow_boolean_cmd ("linux-nat", class_maintenance,
 			   &debug_linux_nat, _("\
-Set debugging of GNU/Linux native target."), _("	\
-Show debugging of GNU/Linux native target."), _("	\
+Set debugging of GNU/Linux native target."), _("\
+Show debugging of GNU/Linux native target."), _("\
 When on, print debug messages relating to the GNU/Linux native target."),
 			   nullptr,
 			   show_debug_linux_nat,

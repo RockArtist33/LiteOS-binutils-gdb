@@ -17,13 +17,13 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 
 #include "amd-dbgapi-target.h"
 #include "amdgpu-tdep.h"
 #include "arch-utils.h"
 #include "elf-bfd.h"
 #include "elf/amdgpu.h"
+#include "event-top.h"
 #include "gdbsupport/fileio.h"
 #include "inferior.h"
 #include "observable.h"

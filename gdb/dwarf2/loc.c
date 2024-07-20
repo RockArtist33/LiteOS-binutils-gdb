@@ -19,7 +19,8 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "event-top.h"
+#include "exceptions.h"
 #include "ui-out.h"
 #include "value.h"
 #include "frame.h"
@@ -31,7 +32,7 @@
 #include "regcache.h"
 #include "objfiles.h"
 #include "block.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "complaints.h"
 #include "dwarf2.h"
 #include "dwarf2/expr.h"
@@ -2252,7 +2253,7 @@ dwarf2_get_symbol_read_needs (gdb::array_view<const gdb_byte> expr,
 /* A helper function that throws an unimplemented error mentioning a
    given DWARF operator.  */
 
-static void ATTRIBUTE_NORETURN
+[[noreturn]] static void
 unimplemented (unsigned int op)
 {
   const char *name = get_DW_OP_name (op);

@@ -62,6 +62,7 @@ enum option_values
   OPTION_SONAME,
   OPTION_SORT_COMMON,
   OPTION_SORT_SECTION,
+  OPTION_SECTION_ORDERING_FILE,
   OPTION_STATS,
   OPTION_SYMBOLIC,
   OPTION_SYMBOLIC_FUNCTIONS,
@@ -286,6 +287,8 @@ enum option_values
   OPTION_PACKAGE_METADATA,
   OPTION_AUDIT,
   OPTION_COMPRESS_DEBUG,
+  OPTION_ROSEGMENT,
+  OPTION_NO_ROSEGMENT,
   /* Used by emultempl/hppaelf.em.  */
   OPTION_MULTI_SUBSPACE,
   /* Used by emultempl/ia64elf.em.  */
@@ -477,6 +480,7 @@ typedef enum input_enum
   input_script,
   input_mri_script,
   input_version_script,
+  input_section_ordering_script,
   input_dynamic_list,
   input_defsym
 } input_type;

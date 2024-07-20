@@ -17,13 +17,13 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 
 #include "arch-utils.h"
 #include "ax-gdb.h"
 #include "dwarf2/frame.h"
 #include "elf/s390.h"
 #include "elf-bfd.h"
+#include "extract-store-integer.h"
 #include "frame-base.h"
 #include "frame-unwind.h"
 #include "gdbarch.h"
@@ -45,7 +45,7 @@
 #include "features/s390x-linux64.c"
 
 /* Holds the current set of options to be passed to the disassembler.  */
-static char *s390_disassembler_options;
+static std::string s390_disassembler_options;
 
 /* Breakpoints.  */
 

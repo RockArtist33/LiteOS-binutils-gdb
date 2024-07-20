@@ -17,11 +17,10 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
 #include "frame-unwind.h"
 #include "gdbsupport/gdb_obstack.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "language.h"
 #include "observable.h"
 #include "python-internal.h"
@@ -360,6 +359,26 @@ unwind_infopy_add_saved_register (PyObject *self, PyObject *args, PyObject *kw)
 		    pulongest (value->type ()->length ()),
 		    pulongest (reg_size));
       return nullptr;
+    }
+
+
+  try
+    {
+      if (value->optimized_out () || !value->entirely_available ())
+	{
+	  /* If we allow this value to be registered here, pyuw_sniffer is going
+	     to run into an exception when trying to access its contents.
+	     Throwing an exception here just puts a burden on the user to
+	     implement the same checks on the user side.  We could return False
+	     here and True otherwise, but again that might require changes in
+	     user code.  So, handle this with minimal impact for the user, while
+	     improving robustness: silently ignore the register/value pair.  */
+	  Py_RETURN_NONE;
+	}
+    }
+  catch (const gdb_exception &except)
+    {
+      GDB_PY_HANDLE_EXCEPTION (except);
     }
 
   gdbpy_ref<> new_value = gdbpy_ref<>::new_reference (pyo_reg_value);

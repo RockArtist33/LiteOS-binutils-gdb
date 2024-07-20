@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "read-debug-names.h"
 #include "dwarf2/aranges.h"
 #include "dwarf2/cooked-index.h"
@@ -154,6 +153,10 @@ mapped_debug_names_reader::scan_one_entry (const char *name,
 	case DW_FORM_udata:
 	  ull = read_unsigned_leb128 (abfd, entry, &bytes_read);
 	  entry += bytes_read;
+	  break;
+	case DW_FORM_ref_addr:
+	  ull = read_offset (abfd, entry, offset_size);
+	  entry += offset_size;
 	  break;
 	case DW_FORM_ref4:
 	  ull = read_4_bytes (abfd, entry);
@@ -342,13 +345,16 @@ cooked_index_debug_names::do_reading ()
     = create_quick_file_names_table (per_bfd->all_units.size ());
   m_results.emplace_back (nullptr,
 			  complaint_handler.release (),
-			  std::move (exceptions));
+			  std::move (exceptions),
+			  parent_map ());
   std::vector<std::unique_ptr<cooked_index_shard>> indexes;
   indexes.push_back (std::move (m_map.shard));
   cooked_index *table
     = (gdb::checked_static_cast<cooked_index *>
        (per_bfd->index_table.get ()));
-  table->set_contents (std::move (indexes));
+  /* Note that this code never uses IS_PARENT_DEFERRED, so it is safe
+     to pass nullptr here.  */
+  table->set_contents (std::move (indexes), &m_warnings, nullptr);
 
   bfd_thread_cleanup ();
 }

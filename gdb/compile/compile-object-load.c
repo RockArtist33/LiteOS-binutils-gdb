@@ -17,7 +17,6 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "compile-object-load.h"
 #include "compile-internal.h"
 #include "command.h"
@@ -25,7 +24,7 @@
 #include "gdbcore.h"
 #include "readline/tilde.h"
 #include "bfdlink.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "regcache.h"
 #include "inferior.h"
 #include "gdbthread.h"

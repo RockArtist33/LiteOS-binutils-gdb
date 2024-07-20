@@ -17,7 +17,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "event-top.h"
 #include "value.h"
 #include <ctype.h>
 
@@ -30,7 +30,6 @@
 #include "cli/cli-decode.h"
 #include "cli/cli-script.h"
 #include "cli/cli-style.h"
-#include "gdbcmd.h"
 
 #include "extension.h"
 #include "interps.h"

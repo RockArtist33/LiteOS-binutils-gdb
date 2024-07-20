@@ -14,28 +14,28 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import functools
-import gdb
 import heapq
 import inspect
 import json
 import threading
+from contextlib import contextmanager
 
-from .io import start_json_writer, read_json
+import gdb
+
+from .io import read_json, start_json_writer
 from .startup import (
-    exec_and_log,
     DAPException,
     DAPQueue,
+    LogLevel,
+    exec_and_log,
     in_dap_thread,
     in_gdb_thread,
-    send_gdb,
-    send_gdb_with_response,
-    start_thread,
     log,
     log_stack,
-    LogLevel,
+    start_thread,
+    thread_log,
 )
 from .typecheck import type_check
-
 
 # Map capability names to values.
 _capabilities = {}
@@ -61,24 +61,19 @@ class CancellationHandler:
         # Methods on this class acquire this lock before proceeding.
         self.lock = threading.Lock()
         # The request currently being handled, or None.
-        self.in_flight = None
+        self.in_flight_dap_thread = None
+        self.in_flight_gdb_thread = None
         self.reqs = []
 
     def starting(self, req):
-        """Call at the start of the given request.
-
-        Throws the appropriate exception if the request should be
-        immediately cancelled."""
+        """Call at the start of the given request."""
         with self.lock:
-            self.in_flight = req
-            while len(self.reqs) > 0 and self.reqs[0] <= req:
-                if heapq.heappop(self.reqs) == req:
-                    raise KeyboardInterrupt()
+            self.in_flight_dap_thread = req
 
     def done(self, req):
         """Indicate that the request is done."""
         with self.lock:
-            self.in_flight = None
+            self.in_flight_dap_thread = None
 
     def cancel(self, req):
         """Call to cancel a request.
@@ -87,7 +82,7 @@ class CancellationHandler:
         If the request is in flight, it is interrupted.
         If the request has not yet been seen, the cancellation is queued."""
         with self.lock:
-            if req == self.in_flight:
+            if req == self.in_flight_gdb_thread:
                 gdb.interrupt()
             else:
                 # We don't actually ignore the request here, but in
@@ -98,6 +93,29 @@ class CancellationHandler:
                 # to try to check for this.
                 heapq.heappush(self.reqs, req)
 
+    @contextmanager
+    def interruptable_region(self, req):
+        """Return a new context manager that sets in_flight_gdb_thread to
+        REQ."""
+        if req is None:
+            # No request is handled in the region, just execute the region.
+            yield
+            return
+        try:
+            with self.lock:
+                # If the request is cancelled, don't execute the region.
+                while len(self.reqs) > 0 and self.reqs[0] <= req:
+                    if heapq.heappop(self.reqs) == req:
+                        raise KeyboardInterrupt()
+                # Request is being handled by the gdb thread.
+                self.in_flight_gdb_thread = req
+            # Execute region.  This may be interrupted by gdb.interrupt.
+            yield
+        finally:
+            with self.lock:
+                # Request is no longer handled by the gdb thread.
+                self.in_flight_gdb_thread = None
+
 
 class Server:
     """The DAP server class."""
@@ -106,6 +124,8 @@ class Server:
         self.in_stream = in_stream
         self.out_stream = out_stream
         self.child_stream = child_stream
+        self.delayed_events_lock = threading.Lock()
+        self.defer_stop_events = False
         self.delayed_events = []
         # This queue accepts JSON objects that are then sent to the
         # DAP client.  Writing is done in a separate thread to avoid
@@ -159,8 +179,12 @@ class Server:
             log_stack()
             result["success"] = False
             result["message"] = str(e)
-        self.canceller.done(req)
         return result
+
+    @in_dap_thread
+    def _handle_command_finish(self, params):
+        req = params["seq"]
+        self.canceller.done(req)
 
     # Read inferior output and sends OutputEvents to the client.  It
     # is run in its own thread.
@@ -221,8 +245,12 @@ class Server:
                 break
             result = self._handle_command(cmd)
             self._send_json(result)
-            events = self.delayed_events
-            self.delayed_events = []
+            self._handle_command_finish(cmd)
+            events = None
+            with self.delayed_events_lock:
+                events = self.delayed_events
+                self.delayed_events = []
+                self.defer_stop_events = False
             for event, body in events:
                 self.send_event(event, body)
         # Got the terminate request.  This is handled by the
@@ -236,7 +264,22 @@ class Server:
     def send_event_later(self, event, body=None):
         """Send a DAP event back to the client, but only after the
         current request has completed."""
-        self.delayed_events.append((event, body))
+        with self.delayed_events_lock:
+            self.delayed_events.append((event, body))
+
+    @in_gdb_thread
+    def send_event_maybe_later(self, event, body=None):
+        """Send a DAP event back to the client, but if a request is in-flight
+        within the dap thread and that request is configured to delay the event,
+        wait until the response has been sent until the event is sent back to
+        the client."""
+        with self.canceller.lock:
+            if self.canceller.in_flight_dap_thread:
+                with self.delayed_events_lock:
+                    if self.defer_stop_events:
+                        self.delayed_events.append((event, body))
+                        return
+        self.send_event(event, body)
 
     # Note that this does not need to be run in any particular thread,
     # because it just creates an object and writes it to a thread-safe
@@ -269,6 +312,15 @@ def send_event(event, body=None):
     _server.send_event(event, body)
 
 
+def send_event_maybe_later(event, body=None):
+    """Send a DAP event back to the client, but if a request is in-flight
+    within the dap thread and that request is configured to delay the event,
+    wait until the response has been sent until the event is sent back to
+    the client."""
+    global _server
+    _server.send_event_maybe_later(event, body)
+
+
 # A helper decorator that checks whether the inferior is running.
 def _check_not_running(func):
     @functools.wraps(func)
@@ -289,7 +341,8 @@ def request(
     *,
     response: bool = True,
     on_dap_thread: bool = False,
-    expect_stopped: bool = True
+    expect_stopped: bool = True,
+    defer_stop_events: bool = False
 ):
     """A decorator for DAP requests.
 
@@ -310,6 +363,10 @@ def request(
     fail with the 'notStopped' reason if it is processed while the
     inferior is running.  When EXPECT_STOPPED is False, the request
     will proceed regardless of the inferior's state.
+
+    If DEFER_STOP_EVENTS is True, then make sure any stop events sent
+    during the request processing are not sent to the client until the
+    response has been sent.
     """
 
     # Validate the parameters.
@@ -337,6 +394,11 @@ def request(
             func = in_gdb_thread(func)
 
             if response:
+                if defer_stop_events:
+                    global _server
+                    if _server is not None:
+                        with _server.delayed_events_lock:
+                            _server.defer_stop_events = True
 
                 def sync_call(**args):
                     return send_gdb_with_response(lambda: func(**args))
@@ -422,3 +484,76 @@ def cancel(**args):
     # ... which gdb takes to mean that it is fine for all cancel
     # requests to report success.
     return None
+
+
+class Invoker(object):
+    """A simple class that can invoke a gdb command."""
+
+    def __init__(self, cmd):
+        self.cmd = cmd
+
+    # This is invoked in the gdb thread to run the command.
+    @in_gdb_thread
+    def __call__(self):
+        exec_and_log(self.cmd)
+
+
+class Cancellable(object):
+
+    def __init__(self, fn, result_q=None):
+        self.fn = fn
+        self.result_q = result_q
+        with _server.canceller.lock:
+            self.req = _server.canceller.in_flight_dap_thread
+
+    # This is invoked in the gdb thread to run self.fn.
+    @in_gdb_thread
+    def __call__(self):
+        try:
+            with _server.canceller.interruptable_region(self.req):
+                val = self.fn()
+                if self.result_q is not None:
+                    self.result_q.put(val)
+        except (Exception, KeyboardInterrupt) as e:
+            if self.result_q is not None:
+                # Pass result or exception to caller.
+                self.result_q.put(e)
+            elif isinstance(e, KeyboardInterrupt):
+                # Fn was cancelled.
+                pass
+            else:
+                # Exception happened.  Ignore and log it.
+                err_string = "%s, %s" % (e, type(e))
+                thread_log("caught exception: " + err_string)
+                log_stack()
+
+
+def send_gdb(cmd):
+    """Send CMD to the gdb thread.
+    CMD can be either a function or a string.
+    If it is a string, it is passed to gdb.execute."""
+    if isinstance(cmd, str):
+        cmd = Invoker(cmd)
+
+    # Post the event and don't wait for the result.
+    gdb.post_event(Cancellable(cmd))
+
+
+def send_gdb_with_response(fn):
+    """Send FN to the gdb thread and return its result.
+    If FN is a string, it is passed to gdb.execute and None is
+    returned as the result.
+    If FN throws an exception, this function will throw the
+    same exception in the calling thread.
+    """
+    if isinstance(fn, str):
+        fn = Invoker(fn)
+
+    # Post the event and wait for the result in result_q.
+    result_q = DAPQueue()
+    gdb.post_event(Cancellable(fn, result_q))
+    val = result_q.get()
+
+    if isinstance(val, (Exception, KeyboardInterrupt)):
+        raise val
+    return val

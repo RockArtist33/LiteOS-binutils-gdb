@@ -17,9 +17,10 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
 #include "dwarf2/frame.h"
+#include "event-top.h"
+#include "extract-store-integer.h"
 #include "frame.h"
 #include "frame-base.h"
 #include "frame-unwind.h"
@@ -66,7 +67,7 @@
 
 #include <algorithm>
 #include "cli/cli-utils.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "auxv.h"
 
 #define MAX_PROC_NAME_SIZE sizeof("/proc/99999/lwp/9999/adi/lstatus")

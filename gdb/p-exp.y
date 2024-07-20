@@ -43,7 +43,6 @@
    Probably also lots of other problems, less well defined PM.  */
 %{
 
-#include "defs.h"
 #include <ctype.h>
 #include "expression.h"
 #include "value.h"
@@ -75,6 +74,8 @@ static int yylex (void);
 static void yyerror (const char *);
 
 static char *uptok (const char *, int);
+
+static const char *pascal_skip_string (const char *str);
 
 using namespace expr;
 %}
@@ -724,8 +725,8 @@ variable:	name_not_typename
 			      if (msymbol.minsym != NULL)
 				pstate->push_new<var_msym_value_operation>
 				  (msymbol);
-			      else if (!have_full_symbols ()
-				       && !have_partial_symbols ())
+			      else if (!have_full_symbols (current_program_space)
+				       && !have_partial_symbols (current_program_space))
 				error (_("No symbol table is loaded.  "
 				       "Use the \"file\" command."));
 			      else
@@ -1042,6 +1043,28 @@ uptok (const char *tokstart, int namelen)
   return uptokstart;
 }
 
+/* Skip over a Pascal string.  STR must point to the opening single quote
+   character.  This function returns a pointer to the character after the
+   closing single quote character.
+
+   This function does not support embedded, escaped single quotes, which
+   is done by placing two consecutive single quotes into a string.
+   Support for this would be easy to add, but this function is only used
+   from the Python expression parser, and if we did skip over escaped
+   quotes then the rest of the expression parser wouldn't handle them
+   correctly.  */
+static const char *
+pascal_skip_string (const char *str)
+{
+  gdb_assert (*str == '\'');
+
+  do
+    ++str;
+  while (*str != '\0' && *str != '\'');
+
+  return str;
+}
+
 /* Read one token, getting characters through lexptr.  */
 
 static int
@@ -1120,7 +1143,7 @@ yylex (void)
       c = *pstate->lexptr++;
       if (c != '\'')
 	{
-	  namelen = skip_quoted (tokstart) - tokstart;
+	  namelen = pascal_skip_string (tokstart) - tokstart;
 	  if (namelen > 2)
 	    {
 	      pstate->lexptr = tokstart + namelen;
@@ -1216,13 +1239,8 @@ yylex (void)
 	toktype = parse_number (pstate, tokstart,
 				p - tokstart, got_dot | got_e, &yylval);
 	if (toktype == ERROR)
-	  {
-	    char *err_copy = (char *) alloca (p - tokstart + 1);
-
-	    memcpy (err_copy, tokstart, p - tokstart);
-	    err_copy[p - tokstart] = 0;
-	    error (_("Invalid number \"%s\"."), err_copy);
-	  }
+	  error (_("Invalid number \"%.*s\"."), (int) (p - tokstart),
+		 tokstart);
 	pstate->lexptr = p;
 	return toktype;
       }

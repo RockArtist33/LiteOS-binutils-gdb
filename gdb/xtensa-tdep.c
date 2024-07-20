@@ -17,7 +17,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
+#include "extract-store-integer.h"
 #include "frame.h"
 #include "solib-svr4.h"
 #include "symtab.h"
@@ -37,7 +37,7 @@
 #include "gdbarch.h"
 
 #include "command.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 
 #include "xtensa-isa.h"
 #include "xtensa-tdep.h"

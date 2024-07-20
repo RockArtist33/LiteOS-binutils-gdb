@@ -17,9 +17,10 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#include "defs.h"
 #include "arch-utils.h"
 #include <ctype.h>
+#include "event-top.h"
+#include "exceptions.h"
 #include "hashtab.h"
 #include "symtab.h"
 #include "frame.h"
@@ -28,7 +29,7 @@
 #include "gdbtypes.h"
 #include "expression.h"
 #include "gdbcore.h"
-#include "gdbcmd.h"
+#include "cli/cli-cmds.h"
 #include "value.h"
 #include "command.h"
 #include "inferior.h"
@@ -57,7 +58,6 @@
 #include "valprint.h"
 #include "jit.h"
 #include "parser-defs.h"
-#include "gdbsupport/gdb_regex.h"
 #include "probe.h"
 #include "cli/cli-utils.h"
 #include "stack.h"
@@ -2154,7 +2154,7 @@ update_watchpoint (struct watchpoint *b, bool reparse)
     {
       std::vector<value_ref_ptr> val_chain;
       struct value *v, *result;
-      struct program_space *frame_pspace;
+      struct program_space *wp_pspace;
 
       fetch_subexp_value (b->exp.get (), b->exp->op.get (), &v, &result,
 			  &val_chain, false);
@@ -2173,7 +2173,10 @@ update_watchpoint (struct watchpoint *b, bool reparse)
 	  b->val_valid = true;
 	}
 
-      frame_pspace = get_frame_program_space (get_selected_frame (NULL));
+      if (b->exp_valid_block == nullptr)
+	wp_pspace = current_program_space;
+      else
+	wp_pspace = get_frame_program_space (get_selected_frame (NULL));
 
       /* Look at each value on the value chain.  */
       gdb_assert (!val_chain.empty ());
@@ -2233,7 +2236,7 @@ update_watchpoint (struct watchpoint *b, bool reparse)
 
 		  bp_location *loc = b->allocate_location ();
 		  loc->gdbarch = v->type ()->arch ();
-		  loc->pspace = frame_pspace;
+		  loc->pspace = wp_pspace;
 		  loc->address
 		    = gdbarch_remove_non_address_bits (loc->gdbarch, addr);
 		  b->add_location (*loc);
@@ -2358,7 +2361,7 @@ update_watchpoint (struct watchpoint *b, bool reparse)
 	 bpstat_stop_status requires a location to be able to report
 	 stops, so make sure there's at least a dummy one.  */
       if (b->type == bp_watchpoint && !b->has_locations ())
-	add_dummy_location (b, frame_pspace);
+	add_dummy_location (b, wp_pspace);
     }
   else if (!within_current_scope)
     {
@@ -3707,7 +3710,7 @@ create_longjmp_master_breakpoint (void)
     {
       set_current_program_space (pspace);
 
-      for (objfile *obj : current_program_space->objfiles ())
+      for (objfile *obj : pspace->objfiles ())
 	{
 	  /* Skip separate debug object, it's handled in the loop below.  */
 	  if (obj->separate_debug_objfile_backlink != nullptr)
@@ -3740,7 +3743,7 @@ create_std_terminate_master_breakpoint (void)
     {
       set_current_program_space (pspace);
 
-      for (objfile *objfile : current_program_space->objfiles ())
+      for (objfile *objfile : pspace->objfiles ())
 	{
 	  struct breakpoint *b;
 	  struct breakpoint_objfile_data *bp_objfile_data;
@@ -5665,6 +5668,8 @@ bpstat_check_breakpoint_conditions (bpstat *bs, thread_info *thread)
 	{
 	  try
 	    {
+	      scoped_restore reset_in_cond_eval
+		= make_scoped_restore (&thread->control.in_cond_eval, true);
 	      condition_result = breakpoint_cond_eval (cond);
 	    }
 	  catch (const gdb_exception_error &ex)
@@ -8087,7 +8092,7 @@ disable_breakpoints_in_freed_objfile (struct objfile *objfile)
 	  if (loc.shlib_disabled != 0)
 	    continue;
 
-	  if (objfile->pspace != loc.pspace)
+	  if (objfile->pspace () != loc.pspace)
 	    continue;
 
 	  if (loc.loc_type != bp_loc_hardware_breakpoint
@@ -8525,11 +8530,15 @@ bp_loc_is_permanent (struct bp_location *loc)
 static void
 update_dprintf_command_list (struct breakpoint *b)
 {
+  gdb_assert (b->type == bp_dprintf);
+  gdb_assert (b->extra_string != nullptr);
+
   const char *dprintf_args = b->extra_string.get ();
   gdb::unique_xmalloc_ptr<char> printf_line = nullptr;
 
-  if (!dprintf_args)
-    return;
+  /* Trying to create a dprintf breakpoint without a format and args
+     string should be detected at creation time.  */
+  gdb_assert (dprintf_args != nullptr);
 
   dprintf_args = skip_spaces (dprintf_args);
 
@@ -8693,19 +8702,14 @@ code_breakpoint::code_breakpoint (struct gdbarch *gdbarch_,
       /* Do not set breakpoint locations conditions yet.  As locations
 	 are inserted, they get sorted based on their addresses.  Let
 	 the list stabilize to have reliable location numbers.  */
-
-      /* Dynamic printf requires and uses additional arguments on the
-	 command line, otherwise it's an error.  */
-      if (type == bp_dprintf)
-	{
-	  if (extra_string != nullptr)
-	    update_dprintf_command_list (this);
-	  else
-	    error (_("Format string required"));
-	}
-      else if (extra_string != nullptr)
-	error (_("Garbage '%s' at end of command"), extra_string.get ());
     }
+
+  /* Dynamic printf requires and uses additional arguments on the
+     command line, otherwise it's an error.  */
+  if (type == bp_dprintf)
+    update_dprintf_command_list (this);
+  else if (extra_string != nullptr)
+    error (_("Garbage '%s' at end of command"), extra_string.get ());
 
   /* The order of the locations is now stable.  Set the location
      condition using the location's number.  */
@@ -8821,8 +8825,6 @@ static void
 parse_breakpoint_sals (location_spec *locspec,
 		       struct linespec_result *canonical)
 {
-  struct symtab_and_line cursal;
-
   if (locspec->type () == LINESPEC_LOCATION_SPEC)
     {
       const char *spec
@@ -8871,7 +8873,8 @@ parse_breakpoint_sals (location_spec *locspec,
 
      ObjC: However, don't match an Objective-C method name which
      may have a '+' or '-' succeeded by a '['.  */
-  cursal = get_current_source_symtab_and_line ();
+  symtab_and_line cursal
+    = get_current_source_symtab_and_line (current_program_space);
   if (last_displayed_sal_is_valid ())
     {
       const char *spec = NULL;
@@ -9219,11 +9222,27 @@ create_breakpoint (struct gdbarch *gdbarch,
   gdb_assert (inferior == -1 || inferior > 0);
   gdb_assert (thread == -1 || inferior == -1);
 
+  /* If PARSE_EXTRA is true then the thread and inferior details will be
+     parsed from the EXTRA_STRING, the THREAD and INFERIOR arguments
+     should be -1.  */
+  gdb_assert (!parse_extra || thread == -1);
+  gdb_assert (!parse_extra || inferior == -1);
+
   gdb_assert (ops != NULL);
 
   /* If extra_string isn't useful, set it to NULL.  */
   if (extra_string != NULL && *extra_string == '\0')
     extra_string = NULL;
+
+  /* A bp_dprintf must always have an accompanying EXTRA_STRING containing
+     the dprintf format and arguments -- PARSE_EXTRA should always be false
+     in this case.
+
+     For all other breakpoint types, EXTRA_STRING should be nullptr unless
+     PARSE_EXTRA is true.  */
+  gdb_assert ((type_wanted == bp_dprintf)
+	      ? (extra_string != nullptr && !parse_extra)
+	      : (extra_string == nullptr || parse_extra));
 
   try
     {
@@ -9288,6 +9307,8 @@ create_breakpoint (struct gdbarch *gdbarch,
 
       if (parse_extra)
 	{
+	  gdb_assert (type_wanted != bp_dprintf);
+
 	  gdb::unique_xmalloc_ptr<char> rest;
 	  gdb::unique_xmalloc_ptr<char> cond;
 
@@ -9296,15 +9317,15 @@ create_breakpoint (struct gdbarch *gdbarch,
 	  find_condition_and_thread_for_sals (lsal.sals, extra_string,
 					      &cond, &thread, &inferior,
 					      &task, &rest);
+
+	  if (rest.get () != nullptr && *(rest.get ()) != '\0')
+	    error (_("Garbage '%s' at end of command"), rest.get ());
+
 	  cond_string_copy = std::move (cond);
 	  extra_string_copy = std::move (rest);
 	}
       else
 	{
-	  if (type_wanted != bp_dprintf
-	      && extra_string != NULL && *extra_string != '\0')
-		error (_("Garbage '%s' at end of location"), extra_string);
-
 	  /* Check the validity of the condition.  We should error out
 	     if the condition is invalid at all of the locations and
 	     if it is not forced.  In the PARSE_EXTRA case above, this
@@ -9515,21 +9536,18 @@ dprintf_command (const char *arg, int from_tty)
 
   /* If non-NULL, ARG should have been advanced past the location;
      the next character must be ','.  */
-  if (arg != NULL)
+  if (arg == nullptr || arg[0] != ',' || arg[1] == '\0')
+    error (_("Format string required"));
+  else
     {
-      if (arg[0] != ',' || arg[1] == '\0')
-	error (_("Format string required"));
-      else
-	{
-	  /* Skip the comma.  */
-	  ++arg;
-	}
+      /* Skip the comma.  */
+      ++arg;
     }
 
   create_breakpoint (get_current_arch (),
 		     locspec.get (),
 		     NULL, -1, -1,
-		     arg, false, 1 /* parse arg */,
+		     arg, false, 0 /* parse arg */,
 		     0, bp_dprintf,
 		     0 /* Ignore count */,
 		     pending_break_support,
@@ -12403,9 +12421,6 @@ dprintf_breakpoint::re_set ()
 {
   re_set_default ();
 
-  /* extra_string should never be non-NULL for dprintf.  */
-  gdb_assert (extra_string != NULL);
-
   /* 1 - connect to target 1, that can run breakpoint commands.
      2 - create a dprintf, which resolves fine.
      3 - disconnect from target 1
@@ -12416,8 +12431,7 @@ dprintf_breakpoint::re_set ()
      answers for target_can_run_breakpoint_commands().
      Given absence of finer grained resetting, we get to do
      it all the time.  */
-  if (extra_string != NULL)
-    update_dprintf_command_list (this);
+  update_dprintf_command_list (this);
 }
 
 /* Implement the "print_recreate" method for dprintf.  */
@@ -14135,6 +14149,12 @@ create_tracepoint_from_upload (struct uploaded_tp *utp)
 
   location_spec_up locspec = string_to_location_spec (&addr_str,
 						      current_language);
+
+
+  gdb_assert (addr_str != nullptr);
+  if (*addr_str != '\0')
+    error (_("Garbage '%s' at end of location"), addr_str);
+
   if (!create_breakpoint (get_current_arch (),
 			  locspec.get (),
 			  utp->cond_string.get (), -1, -1, addr_str,
@@ -14577,7 +14597,7 @@ command" [PROBE_MODIFIER] [LOCATION] [thread THREADNUM]\n\
 \t[-force-condition] [if CONDITION]\n\
 PROBE_MODIFIER shall be present if the command is to be placed in a\n\
 probe point.  Accepted values are `-probe' (for a generic, automatically\n\
-guessed probe type), `-probe-stap' (for a SystemTap probe) or \n\
+guessed probe type), `-probe-stap' (for a SystemTap probe) or\n\
 `-probe-dtrace' (for a DTrace probe).\n\
 LOCATION may be a linespec, address, or explicit location as described\n\
 below.\n\
@@ -15008,7 +15028,7 @@ Do \"help tracepoints\" for info on other tracepoint commands."));
 Set a static tracepoint at location or marker.\n\
 \n\
 strace [LOCATION] [if CONDITION]\n\
-LOCATION may be a linespec, explicit, or address location (described below) \n\
+LOCATION may be a linespec, explicit, or address location (described below)\n\
 or -m MARKER_ID.\n\n\
 If a marker id is specified, probe the marker with that name.  With\n\
 no LOCATION, uses current execution address of the selected stack frame.\n\
